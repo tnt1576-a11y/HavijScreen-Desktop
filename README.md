@@ -1,6 +1,10 @@
 # HavijScreen
 
+<img src="app/assets/carrot.png" width="88" alt="HavijScreen carrot">
+
 A small Windows desktop app for sharing gameplay with a friend. Create an invitation, exchange a reply, and stream directly between your PCs. No account or hosted room server required.
+
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.1.3/HavijScreen-0.1.3-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.1.3)
 
 ## Run on Windows
 
