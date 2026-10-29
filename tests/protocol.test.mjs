@@ -33,15 +33,14 @@ test('a reply with invalid SDP or identity is rejected even with the secret', as
   const code = await encodeReply({ v: 1, session: invite.session, room: invite.room, peer: invite.peer, name: 'Bob', sdp: { type: 'offer', sdp: 'v=0' } }, invite.secret);
   await assert.rejects(decodeReply(code, invite.secret, invite.session), /authenticated/);
 });
-test('multiple viewers divide the video budget and retain the frame-rate ceiling', () => {
-  for (const viewers of [1, 2, 3]) {
-    const result = videoParameters({ encodings: [{}] }, PRESETS.crisp, 8, viewers);
-    assert.ok(result.encodings[0].maxBitrate * viewers <= 8000000);
-    assert.equal(result.encodings[0].maxFramerate, 60);
+test('quality presets set bitrate and frame rate without a total upload limit', () => {
+  for (const preset of Object.values(PRESETS)) {
+    const result = videoParameters({ encodings: [{}] }, preset);
+    assert.equal(result.encodings[0].maxBitrate, preset.bitrate);
+    assert.equal(result.encodings[0].maxFramerate, preset.fps);
     assert.equal(result.degradationPreference, 'maintain-framerate');
   }
-  assert.equal(videoParameters({ encodings: [{}] }, PRESETS.efficient, 30, 1).encodings[0].maxBitrate, 2500000);
-  assert.equal(videoParameters({ encodings: [] }, PRESETS.efficient, 8, 1), null);
+  assert.equal(videoParameters({ encodings: [] }, PRESETS.efficient), null);
 });
 test('name limits prevent control characters and retain international names', () => {
   assert.ok(validName('علی')); assert.ok(validName('Alice & Bob'));

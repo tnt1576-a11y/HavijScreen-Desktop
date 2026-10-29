@@ -42,7 +42,7 @@ export async function encodeInvite(payload) {
 }
 export async function decodeInvite(code, now = Date.now()) {
   code = String(code).trim();
-  if (code.length > MAX_CODE || !code.startsWith('DRIFT1I.')) throw new Error('Paste a complete Drift invitation code.');
+  if (code.length > MAX_CODE || !code.startsWith('DRIFT1I.')) throw new Error('Paste a complete HavijScreen invitation code.');
   let data;
   try {
     const bytes = await readLimited(new Blob([fromBase64(code.slice(8))]).stream().pipeThrough(new DecompressionStream('deflate')));
@@ -75,9 +75,9 @@ export async function decodeReply(code, secret, session) {
     return data;
   } catch { throw new Error('This reply could not be authenticated. Ask your friend to copy it again.'); }
 }
-export function videoParameters(parameters, preset, totalMbps, viewers) {
+export function videoParameters(parameters, preset) {
   if (!parameters.encodings?.length) return null;
-  parameters.encodings[0].maxBitrate = Math.floor(Math.min(preset.bitrate, totalMbps * 1000000 / Math.max(1, viewers) - 128000));
+  parameters.encodings[0].maxBitrate = preset.bitrate;
   parameters.encodings[0].maxFramerate = preset.fps;
   parameters.degradationPreference = 'maintain-framerate';
   return parameters;

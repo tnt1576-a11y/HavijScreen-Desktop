@@ -1,18 +1,20 @@
 import { Room } from './room.mjs';
 import { PRESETS, videoParameters } from './protocol.mjs';
+import { requestCapture } from './capture.mjs';
+import { startNativeAudio } from './native-audio.mjs';
 
 const $ = id => document.getElementById(id);
-let room = new Room(), capture = null, source = 'monitor', pairMode = '', pendingSession = null, joining = false;
+let room = new Room(), capture = null, pairMode = '', pendingSession = null, joining = false;
 let toastTimer, statsBusy = false, previousStats = new Map(), mediaBusy = false, tuning = Promise.resolve();
+let nativeAudio = null, nativeAudioAbort = null, nativeAudioAvailable = false, retryNativeAudio = false;
+let interfaceReadyReported = false;
 let preferences = {};
-try { preferences = JSON.parse(localStorage.getItem('drift-preferences') || '{}'); } catch { /* Corrupt preferences reset safely. */ }
+try { preferences = JSON.parse(localStorage.getItem('havijscreen-preferences') || localStorage.getItem('drift-preferences') || '{}'); } catch { /* Corrupt preferences reset safely. */ }
 $('display-name').value = typeof preferences.name === 'string' ? preferences.name.slice(0, 32) : 'Player';
 $('quality').value = PRESETS[preferences.quality] ? preferences.quality : 'efficient';
-$('bandwidth').value = Number(preferences.bandwidth) >= 1 && Number(preferences.bandwidth) <= 30 ? preferences.bandwidth : 8;
-if (typeof preferences.audio === 'boolean') $('audio').checked = preferences.audio;
 if (typeof preferences.stun === 'boolean') $('stun').checked = preferences.stun;
 function save() {
-  try { localStorage.setItem('drift-preferences', JSON.stringify({ name: $('display-name').value, quality: $('quality').value, bandwidth: Number($('bandwidth').value), audio: $('audio').checked, stun: $('stun').checked })); } catch { /* App remains usable without storage. */ }
+  try { localStorage.setItem('havijscreen-preferences', JSON.stringify({ name: $('display-name').value, quality: $('quality').value, stun: $('stun').checked })); } catch { /* App remains usable without storage. */ }
 }
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false; toastTimer = setTimeout(() => { $('toast').hidden = true; }, 9000); }
 function bindRoom() {
@@ -51,43 +53,21 @@ function renderRoom() {
   $('join-button').hidden = !!room.peers.size;
   $('leave-button').hidden = !room.peers.size;
   $('display-name').disabled = !!room.peers.size;
-  $('top-status').textContent = count ? `${count + 1} people. One shared moment.` : 'Your private corner of the internet';
-  $('connection-pill').lastChild.textContent = count ? ` ${count} peer${count > 1 ? 's' : ''} connected` : ' Ready when you are';
   $('stat-viewers').replaceChildren(document.createTextNode(`${room.viewers.length} `), small(room.viewers.length === 1 ? 'person' : 'people'));
-  $('stage-note').textContent = count ? 'Choose a stream in the room list to watch. Each viewer uses a direct connection.' : 'Start a stream, then invite a friend. No one receives video until they choose to watch.';
   refreshStage();
 }
 function small(text) { const el = document.createElement('small'); el.textContent = text; return el; }
-function setSource(value) {
-  source = value;
-  for (const key of ['monitor', 'window']) { const button = $('source-' + key); button.classList.toggle('selected', key === value); button.setAttribute('aria-pressed', String(key === value)); }
-  $('source-help').textContent = value === 'monitor' ? 'Pick a display in the Windows capture picker.' : 'Pick your game or app in the Windows capture picker.';
-}
-$('source-monitor').onclick = () => setSource('monitor');
-$('source-window').onclick = () => setSource('window');
 function refreshStage() {
   const hasVideo = $('videos').childElementCount > 0;
   $('videos').hidden = !hasVideo; $('empty-state').hidden = hasVideo;
   $('sharing-banner').hidden = !capture;
-  $('stage-title').textContent = capture ? 'Your moment, live.' : room.connected.length ? 'Your people are here.' : 'Make it a shared moment.';
-  $('sharing-label').textContent = capture ? (room.viewers.length ? `Sharing with ${room.viewers.length} viewer${room.viewers.length > 1 ? 's' : ''}` : 'Sharing is ready · waiting for a viewer') : '';
+  $('sharing-label').textContent = capture ? (room.viewers.length ? `${room.viewers.length} watching` : 'Sharing · no viewers') : '';
+  $('audio-status').textContent = captureInfo().audio ? 'Audio on' : 'Video only';
   $('share-button').classList.toggle('stop', !!capture);
   $('share-button').querySelector('span').textContent = capture ? 'Stop sharing' : 'Start sharing';
   $('share-button').querySelector('use').setAttribute('href', capture ? '#i-stop' : '#i-screen');
-  $('hero-share').textContent = capture ? 'Choose a stream from the room list' : 'Share your screen';
+  $('hero-share').querySelector('span').textContent = capture ? 'Sharing' : 'Share your screen';
   $('hero-share').disabled = !!capture;
-  $('source-monitor').disabled = !!capture;
-  $('source-window').disabled = !!capture;
-  $('source-help').textContent = capture ? 'Stop sharing to choose a different source.' : source === 'monitor' ? 'Pick a display in the Windows capture picker.' : 'Pick your game or app in the Windows capture picker.';
-  if (capture) {
-    $('empty-state').querySelector('h3').textContent = 'Your screen is ready.';
-    $('empty-state').querySelector('p').textContent = room.connected.length ? 'Your friends can choose Watch stream to join in.' : 'Invite someone to share the moment with you.';
-    $('empty-state').querySelector('small').textContent = 'Local preview is off to save rendering work.';
-  } else {
-    $('empty-state').querySelector('h3').innerHTML = 'A front-row seat.<br>From anywhere.';
-    $('empty-state').querySelector('p').innerHTML = "Share your next clutch, explore a new world,<br>or just show a friend what you're up to.";
-    $('empty-state').querySelector('small').textContent = 'You choose exactly what they see.';
-  }
 }
 function videoCard(id, name, stream, local = false) {
   let card = document.querySelector(`[data-video="${id}"]`);
@@ -109,33 +89,53 @@ function removeVideo(id) {
   refreshStage();
 }
 function updatePreview() { if (capture && $('preview').checked) videoCard('local', 'Your preview · audio muted', capture, true); else removeVideo('local'); }
-async function startCapture() {
+async function startCapture(videoOnly = false, windowsAudio = false) {
+  // DOM click handlers pass MouseEvent; only the explicit retry passes true.
+  videoOnly = videoOnly === true;
   if (mediaBusy) return;
   if (capture) { await stopCapture(); return; }
-  if (!navigator.mediaDevices?.getDisplayMedia) { toast('Screen capture is unavailable. Use Drift on Windows with an up-to-date WebView2 runtime.'); return; }
+  if (!navigator.mediaDevices?.getDisplayMedia) { toast('Screen capture is unavailable. Use HavijScreen on Windows with an up-to-date WebView2 runtime.'); return; }
   mediaBusy = true; $('share-button').disabled = true; $('hero-share').disabled = true;
   let next;
   try {
     const preset = PRESETS[$('quality').value];
-    next = await navigator.mediaDevices.getDisplayMedia({
-      video: { displaySurface: source, width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } },
-      audio: $('audio').checked ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false } : false,
-      systemAudio: $('audio').checked ? 'include' : 'exclude', windowAudio: $('audio').checked ? 'system' : 'exclude', selfBrowserSurface: 'exclude', surfaceSwitching: 'exclude'
-    });
+    const result = await requestCapture(navigator.mediaDevices, videoOnly, () => toast('Audio could not start. Choose the source again to share video only.'), nativeAudioAvailable);
+    next = result.stream;
     const track = next.getVideoTracks()[0];
     if (!track || track.readyState !== 'live') throw new Error('The capture source is unavailable. Please choose another.');
+    track.addEventListener('ended', () => stopCapture().catch(error => toast(error.message)), { once: true });
+    if (windowsAudio && nativeAudioAvailable) {
+      nativeAudioAbort = new AbortController();
+      nativeAudio = await startNativeAudio(window.chrome.webview, message => {
+        if (!capture) return;
+        room.mediaInfo = captureInfo(); room.broadcast({ type: 'sharing', active: true, info: room.mediaInfo }); refreshStage();
+        toast(message || 'Shared audio stopped.');
+      }, nativeAudioAbort.signal);
+      next.addTrack(nativeAudio.track);
+    }
     track.contentHint = 'motion';
-    await track.applyConstraints({ width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } });
-    capture = next; track.addEventListener('ended', () => stopCapture().catch(error => toast(error.message)), { once: true });
+    try {
+      await track.applyConstraints({ width: { ideal: preset.width, max: preset.width }, height: { ideal: preset.height, max: preset.height }, frameRate: { ideal: preset.fps, max: preset.fps } });
+    } catch { toast('The source is using its available capture quality.'); }
+    if (track.readyState !== 'live') throw new DOMException('Capture stopped.', 'AbortError');
+    capture = next;
     await room.setMedia(capture, captureInfo());
     await tuneSenders(); updatePreview(); updateQuality();
-    if ($('audio').checked && !capture.getAudioTracks().some(t => t.readyState === 'live')) toast('Screen sharing started without audio. Your selected source did not provide an audio track.');
-    for (const audio of capture.getAudioTracks()) audio.addEventListener('ended', () => toast('The captured audio stopped. Stop and start sharing to choose audio again.'), { once: true });
+    if (result.audioFallback) toast('Sharing video only. System audio could not start.');
+    for (const audio of capture.getAudioTracks()) audio.addEventListener('ended', () => { refreshStage(); toast('Shared audio stopped.'); }, { once: true });
     window.chrome?.webview?.postMessage({ type: 'sharing', active: true });
   } catch (error) {
     next?.getTracks().forEach(track => track.stop()); capture = null;
+    nativeAudioAbort?.abort(); nativeAudioAbort = null; nativeAudio?.stop(); nativeAudio = null;
     await room.setMedia(null).catch(() => {});
-    if (error.name !== 'NotAllowedError') toast('Could not share: ' + error.message);
+    if (error.retryWithNativeAudio || error.retryWithoutAudio) {
+      retryNativeAudio = nativeAudioAvailable;
+      $('capture-error-title').textContent = retryNativeAudio ? 'Use Windows audio capture?' : "System audio couldn't start.";
+      $('capture-error-description').textContent = retryNativeAudio ? 'Select the screen or window once more. HavijScreen will capture system audio directly through Windows.' : 'You can still share video without audio.';
+      $('retry-video').textContent = retryNativeAudio ? 'Choose source & share with audio' : 'Share video only';
+      $('capture-error-dialog').showModal();
+    }
+    else if (error.name !== 'NotAllowedError' && error.name !== 'AbortError') toast('Could not share: ' + error.message);
   } finally { mediaBusy = false; $('share-button').disabled = false; refreshStage(); }
 }
 function captureInfo() {
@@ -144,8 +144,10 @@ function captureInfo() {
 }
 async function stopCapture() {
   const previous = capture; capture = null;
+  nativeAudioAbort?.abort(); nativeAudioAbort = null;
   // Stop the source first, even if a peer or an encoder rejects cleanup.
   previous?.getTracks().forEach(track => track.stop());
+  nativeAudio?.stop(); nativeAudio = null;
   removeVideo('local');
   await room.setMedia(null).catch(error => toast('Capture stopped. Peer cleanup: ' + error.message));
   previousStats.clear(); $('stat-quality').textContent = 'Not sharing'; $('stat-upload').replaceChildren(document.createTextNode('— '), small('Mbps')); $('stat-encoder').textContent = 'Waiting for a viewer';
@@ -159,7 +161,7 @@ function tuneSenders() {
         const parameters = sender.getParameters();
         if (!parameters.encodings?.length) continue;
         if (sender.track.kind === 'video') {
-          const modified = videoParameters(parameters, PRESETS[$('quality').value], Number($('bandwidth').value), room.viewers.length);
+          const modified = videoParameters(parameters, PRESETS[$('quality').value]);
           if (modified) await sender.setParameters(modified);
         } else { parameters.encodings[0].maxBitrate = 96000; await sender.setParameters(parameters); }
       }
@@ -181,7 +183,7 @@ async function changeQuality() {
 }
 function updateQuality() {
   const hints = { efficient: 'A lighter load. More room for your game.', balanced: 'More detail, with a moderate frame rate.', fluid: 'Smoother motion. Uses more encoding work.', crisp: 'Maximum detail. More GPU and upload work.' };
-  $('quality-hint').textContent = hints[$('quality').value]; $('bandwidth-value').textContent = $('bandwidth').value + ' Mbps';
+  $('quality-hint').textContent = hints[$('quality').value];
   if (capture) { const info = captureInfo(); $('stat-quality').textContent = `${info.height || '?'}p / ${info.fps || '?'} fps`; }
 }
 async function pollStats() {
@@ -233,7 +235,7 @@ function openInvite() {
 function openJoin() {
   resetPairUI(); pairMode = 'join';
   $('pair-eyebrow').textContent = 'PULL UP A CHAIR'; $('pair-title').textContent = "Join your friend's room.";
-  $('pair-description').textContent = 'Paste their invitation. Drift creates a reply for you to send back. A connection starts when your friend accepts it.';
+  $('pair-description').textContent = 'Paste their invitation. HavijScreen creates a reply for you to send back. A connection starts when your friend accepts it.';
   $('code-input-section').hidden = false; $('code-input-label').textContent = "YOUR FRIEND'S INVITATION";
   $('pair-action').textContent = 'Create reply →'; $('pair-dialog').showModal();
 }
@@ -256,7 +258,7 @@ async function pairAction() {
       $('code-input-section').hidden = true; $('code-output-section').hidden = false;
       $('code-output-label').textContent = 'SEND THIS REPLY BACK'; $('code-output').value = code;
       $('code-warning').textContent = 'Send this privately to your host, then wait here for them to accept it.';
-      $('pair-description').textContent = 'One last step: send this reply to your friend. Keep Drift open while they accept it.';
+      $('pair-description').textContent = 'One last step: send this reply to your friend. Keep HavijScreen open while they accept it.';
       $('pair-action').hidden = true; pairMode = 'waiting';
     }
     renderRoom();
@@ -274,6 +276,8 @@ function roomReadyListener() {
 }
 function resetRoom() {
   capture?.getTracks().forEach(track => track.stop()); capture = null;
+  nativeAudioAbort?.abort(); nativeAudioAbort = null;
+  nativeAudio?.stop(); nativeAudio = null;
   room.leave(); room = new Room(); bindRoom(); roomReadyListener();
   pendingSession = null; joining = false; previousStats.clear();
   for (const video of [...$('videos').children]) removeVideo(video.dataset.video);
@@ -300,23 +304,30 @@ $('copy-code').onclick = async () => {
 $('leave-button').onclick = resetRoom;
 $('hero-share').onclick = startCapture; $('share-button').onclick = startCapture; $('banner-stop').onclick = () => stopCapture().catch(error => toast(error.message));
 $('quality').onchange = changeQuality;
-$('bandwidth').oninput = () => { updateQuality(); };
-$('bandwidth').onchange = () => { save(); tuneSenders().catch(error => toast(error.message)); };
-$('audio').onchange = async () => {
-  save();
-  if (!capture) return;
-  if ($('audio').checked && !capture.getAudioTracks().some(t => t.readyState === 'live')) { toast('Stop and start sharing, then enable audio in the Windows picker.'); return; }
-  for (const track of capture.getAudioTracks()) track.enabled = $('audio').checked;
-  room.mediaInfo = captureInfo(); room.broadcast({ type: 'sharing', active: true, info: room.mediaInfo });
-};
 $('preview').onchange = updatePreview;
 $('display-name').oninput = () => { save(); renderRoom(); };
-$('about-button').onclick = () => $('about-dialog').showModal(); $('about-close').onclick = () => $('about-dialog').close();
-window.addEventListener('beforeunload', () => { capture?.getTracks().forEach(track => track.stop()); room.leave(); });
+$('capture-error-close').onclick = () => $('capture-error-dialog').close();
+$('retry-video').onclick = () => { $('capture-error-dialog').close(); startCapture(true, retryNativeAudio); };
+for (const action of ['minimize', 'maximize', 'close']) $('window-' + action).onclick = () => window.chrome?.webview?.postMessage({ type: 'window-' + action });
+window.addEventListener('beforeunload', () => { nativeAudioAbort?.abort(); nativeAudio?.stop(); capture?.getTracks().forEach(track => track.stop()); room.leave(); });
 document.addEventListener('keydown', event => { if (event.ctrlKey && event.shiftKey && event.code === 'KeyS' && capture) { event.preventDefault(); stopCapture().catch(error => toast(error.message)); } });
 window.chrome?.webview?.addEventListener('message', event => {
   if (event.data?.type === 'stop-sharing') stopCapture().catch(error => toast(error.message));
-  if (event.data?.type === 'native-ready') $('shortcut-hint').textContent = event.data.hotkey ? 'Stop from anywhere · Ctrl + Shift + S' : 'Stop in Drift · Ctrl + Shift + S';
+  if (event.data?.type === 'native-ready') {
+    nativeAudioAvailable = event.data.audioLoopback === true; $('window-controls').hidden = false;
+    $('shortcut-hint').textContent = event.data.hotkey ? 'Stop · Ctrl + Shift + S' : 'Stop in HavijScreen · Ctrl + Shift + S';
+    const ready = () => { if (!interfaceReadyReported) { interfaceReadyReported = true; window.chrome.webview.postMessage({ type: 'ui-ready' }); } };
+    // A bounded fallback also works when the renderer is occluded and animation
+    // frames are throttled while the native startup surface covers the WebView.
+    const timeout = setTimeout(ready, 250);
+    requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timeout); ready(); }));
+  }
+  if (event.data?.type === 'window-state') {
+    const max = event.data.maximized === true;
+    $('window-maximize').setAttribute('aria-label', max ? 'Restore' : 'Maximize');
+    $('window-maximize').title = max ? 'Restore' : 'Maximize';
+    document.body.classList.toggle('maximized', max);
+  }
   if (event.data?.type === 'minimized') { document.body.classList.toggle('native-minimized', event.data.active); if (event.data.active) { for (const v of document.querySelectorAll('video')) v.pause(); } else { for (const v of document.querySelectorAll('video')) v.play().catch(() => {}); } }
 });
 renderRoom(); updateQuality();

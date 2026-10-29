@@ -12,12 +12,34 @@ await mkdir('artifacts', { recursive: true });
 try {
   await new Promise((ready, fail) => { server.stdout.once('data', ready); server.once('error', fail); server.once('exit', code => fail(new Error('Preview exited: ' + code))); });
   browser = await chromium.launch({ headless: true, ...(process.env.DRIFT_BROWSER_PATH ? { executablePath: process.env.DRIFT_BROWSER_PATH } : {}), args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
-  async function page(name) {
+  async function page(name, native = false) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
-    await context.addInitScript(() => {
+    await context.addInitScript(native => {
       window.testTracks = [];
+      if (native) {
+        const listeners = new Set(); let timer, phase = 0;
+        const emit = data => { for (const listener of listeners) listener({ data }); };
+        window.nativeStops = 0; window.nativeReadyReports = 0;
+        window.chrome = { ...window.chrome, webview: {
+          addEventListener: (type, listener) => { listeners.add(listener); setTimeout(() => listener({ data: { type: 'native-ready', hotkey: false, audioLoopback: true } }), 0); },
+          removeEventListener: (type, listener) => listeners.delete(listener),
+          postMessage: data => {
+            if (data.type === 'ui-ready') { window.nativeReadyReports++; return; }
+            if (data.type === 'audio-stop') { clearInterval(timer); window.nativeStops++; return; }
+            if (data.type !== 'audio-start') return;
+            emit({ type: 'audio-started', id: data.id, sampleRate: 44100, channels: 8, bits: 32, float: true });
+            timer = setInterval(() => {
+              const samples = new Float32Array(1103 * 8);
+              for (let frame = 0; frame < 1103; frame++) { const tone = Math.sin(phase++ * 2 * Math.PI * 440 / 44100) * .2; samples[frame * 8] = tone; samples[frame * 8 + 1] = tone; }
+              const bytes = new Uint8Array(samples.buffer); let text = ''; for (const b of bytes) text += String.fromCharCode(b);
+              emit({ type: 'audio-data', id: data.id, pcm: btoa(text) });
+            }, 25);
+          }
+        } };
+      }
       navigator.mediaDevices.getDisplayMedia = async options => {
         window.testCaptureOptions = options;
+        if (options.audio && window.failAudioOnce) { window.failAudioOnce = false; throw new DOMException('Could not start audio source', 'NotReadableError'); }
         const canvas = document.createElement('canvas'); canvas.width = 1280; canvas.height = 720;
         const ctx = canvas.getContext('2d'); let frame = 0;
         const timer = setInterval(() => { ctx.fillStyle = frame++ % 2 ? '#305f51' : '#dfad71'; ctx.fillRect(0, 0, 1280, 720); ctx.fillStyle = 'white'; ctx.font = '80px sans-serif'; ctx.fillText('Synthetic gameplay ' + frame, 100, 350); }, 33);
@@ -32,7 +54,7 @@ try {
         }
         window.testTracks.push(...stream.getTracks()); return stream;
       };
-    });
+    }, native);
     const p = await context.newPage(); p.on('pageerror', error => errors.push(name + ': ' + error.message));
     await p.goto('http://127.0.0.1:4318'); await p.locator('#display-name').fill(name);
     return p;
@@ -55,21 +77,36 @@ try {
   await alice.screenshot({ path: 'artifacts/01-compact.png', fullPage: true });
   await alice.setViewportSize({ width: 1440, height: 960 });
   results.push('Initial UI renders with no remote assets');
+  assert.equal(await alice.title(), 'HavijScreen');
+  assert.ok(await alice.locator('.brand-icon').evaluate(img => img.complete && img.naturalWidth === 256));
+  assert.match(await alice.locator('.brand').innerText(), /HavijScreen/);
+  results.push('HavijScreen branding and the bundled carrot image render correctly');
+  assert.equal(await alice.locator('#bandwidth, #source-monitor, #source-window, #audio, #top-status, #stage-title, #stage-note, footer').count(), 0);
+  assert.ok(!/Better together|front-row seat|A little setup|Built to stay|GOOD TIMES/.test(await alice.locator('body').innerText()));
+  results.push('Marked slogans, duplicate capture controls, footer, and total upload feature are removed');
+  await alice.evaluate(() => {
+    window.nativeMessages = [];
+    window.chrome = { ...window.chrome, webview: { postMessage: data => window.nativeMessages.push(data), addEventListener: () => {} } };
+    document.getElementById('window-controls').hidden = false;
+  });
+  await alice.locator('#window-minimize').click(); await alice.locator('#window-maximize').click(); await alice.locator('#window-close').click();
+  assert.deepEqual(await alice.evaluate(() => nativeMessages.map(x => x.type)), ['window-minimize', 'window-maximize', 'window-close']);
+  await alice.screenshot({ path: 'artifacts/04-custom-titlebar.png', fullPage: true });
+  results.push('Custom caption buttons send only the expected native window commands');
   // Negative UI path: no native privileges, room, or network connection from malformed input.
   await bob.locator('#join-button').click(); await bob.locator('#code-input').fill('bad invitation'); await bob.locator('#pair-action').click();
-  assert.match(await bob.locator('#pair-error').innerText(), /complete Drift invitation/); await bob.locator('#pair-close').click();
+  assert.match(await bob.locator('#pair-error').innerText(), /complete HavijScreen invitation/); await bob.locator('#pair-close').click();
   results.push('Malformed pairing input is rejected visibly');
   await pair(alice, bob);
   await alice.waitForFunction(() => document.getElementById('room-count').textContent === '2 / 4');
   await bob.waitForFunction(() => document.getElementById('room-count').textContent === '2 / 4');
   results.push('Two separate clients pair without a server or STUN');
-  await alice.locator('#source-window').click(); await alice.locator('#share-button').click();
+  await alice.locator('#share-button').click();
   await bob.locator('.watch-peer').waitFor();
   assert.equal(await alice.locator('#stat-viewers').innerText(), '0 people');
   assert.equal(await bob.locator('video').count(), 0);
-  assert.equal(await alice.evaluate(() => testCaptureOptions.video.displaySurface), 'window');
-  assert.equal(await alice.evaluate(() => !!testCaptureOptions.audio), true);
-  results.push('Application selection and audio options are passed; video is not auto-subscribed');
+  assert.deepEqual(await alice.evaluate(() => testCaptureOptions), { video: true, audio: true });
+  results.push('Minimal capture request leaves source and audio selection to the native picker');
   await bob.locator('.watch-peer').click();
   await bob.waitForFunction(() => { const v = document.querySelector('video'); return v && v.videoWidth > 0 && v.readyState >= 2; }, { timeout: 20000 });
   await alice.waitForFunction(() => document.getElementById('stat-viewers').textContent.includes('1 person'));
@@ -77,7 +114,7 @@ try {
   await bob.locator('.video-caption button').first().click();
   assert.equal(await bob.evaluate(() => document.querySelector('video').muted), false);
   results.push('Synthetic video frames and an audio track reach the watching peer');
-  await alice.locator('#quality').selectOption('fluid'); await alice.locator('#bandwidth').fill('4'); await alice.locator('#bandwidth').dispatchEvent('change');
+  await alice.locator('#quality').selectOption('fluid');
   await alice.screenshot({ path: 'artifacts/02-sharing.png', fullPage: true });
   await bob.screenshot({ path: 'artifacts/03-viewer.png', fullPage: true });
   await pair(alice, carol);
@@ -99,12 +136,12 @@ try {
     guest.watch(host.id, true);
     await new Promise(resolve => setTimeout(resolve, 300));
     const sender = host.connected[0].pc.getSenders().find(s => s.track?.kind === 'video');
-    const parameters = videoParameters(sender.getParameters(), PRESETS.fluid, 4, 2); await sender.setParameters(parameters);
+    const parameters = videoParameters(sender.getParameters(), PRESETS.fluid); await sender.setParameters(parameters);
     const actual = sender.getParameters().encodings[0]; const result = { maxBitrate: actual.maxBitrate, maxFramerate: actual.maxFramerate };
     stream.getTracks().forEach(t => t.stop()); guest.leave(); host.leave(); return result;
   });
-  assert.equal(params.maxBitrate, 1872000); assert.equal(params.maxFramerate, 60);
-  results.push('Real RTCRtpSender accepts the divided bitrate budget and frame-rate ceiling');
+  assert.equal(params.maxBitrate, 8000000); assert.equal(params.maxFramerate, 60);
+  results.push('Real RTCRtpSender accepts the preset quality without the removed total upload cap');
   await pair(alice, dave);
   for (const p of [alice, bob, carol, dave]) await p.waitForFunction(() => document.getElementById('room-count').textContent === '4 / 4', { timeout: 25000 });
   assert.ok(await alice.locator('#invite-button').isDisabled());
@@ -113,16 +150,18 @@ try {
   await alice.waitForFunction(() => document.getElementById('stat-viewers').textContent.includes('1 person'));
   assert.equal(await bob.locator('video').count(), 0);
   results.push('Unsubscribing releases the viewer player and detaches outgoing tracks');
-  await alice.locator('#audio').uncheck();
-  assert.equal(await alice.evaluate(() => testTracks.find(t => t.kind === 'audio').enabled), false);
   await alice.locator('#share-button').click();
   assert.ok(await alice.evaluate(() => testTracks.every(t => t.readyState === 'ended')));
   await carol.waitForFunction(() => document.querySelectorAll('video').length === 0);
-  results.push('Mute disables captured audio; Stop ends every capture track and clears remote players');
+  results.push('Stop ends every capture track and clears remote players');
   // Sharing works in both directions, not only from the host.
+  await bob.evaluate(() => { window.failAudioOnce = true; });
   await bob.locator('#share-button').click(); await alice.locator('.watch-peer').click();
   await alice.waitForFunction(() => document.querySelector('video')?.videoWidth > 0, { timeout: 20000 });
   results.push('A guest can share back to the host without renegotiating or a server');
+  assert.equal(await bob.locator('#audio-status').innerText(), 'Video only');
+  assert.equal(await bob.evaluate(() => testCaptureOptions.audio), false);
+  results.push('Audio-source failure starts a clearly labelled video-only stream instead of aborting sharing');
   await alice.locator('.person.remote').filter({ hasText: 'Carol' }).locator('.remove-peer').click();
   await carol.waitForFunction(() => document.getElementById('room-count').textContent === '1 / 4');
   await bob.waitForFunction(() => document.getElementById('room-count').textContent === '3 / 4');
@@ -132,6 +171,33 @@ try {
   await dave.waitForFunction(() => document.getElementById('room-count').textContent === '1 / 4');
   assert.ok(await bob.evaluate(() => testTracks.every(t => t.readyState === 'ended')));
   results.push('Host departure closes the room and stops the guest capture');
+  const nativePeer = await page('Windows audio', true);
+  await nativePeer.waitForFunction(() => nativeReadyReports === 1);
+  results.push('The native startup surface receives a single ready notification after UI initialization');
+  await pair(alice, nativePeer);
+  await nativePeer.evaluate(() => { window.failAudioOnce = true; });
+  await nativePeer.locator('#share-button').click();
+  await nativePeer.locator('#capture-error-dialog').waitFor();
+  assert.match(await nativePeer.locator('#capture-error-description').innerText(), /directly through Windows/);
+  await nativePeer.locator('#retry-video').click();
+  await nativePeer.waitForFunction(() => document.getElementById('audio-status').textContent === 'Audio on', { timeout: 15000 });
+  await alice.locator('.watch-peer').click();
+  await alice.waitForFunction(() => document.querySelector('video')?.videoWidth > 0, { timeout: 20000 });
+  const peak = await alice.evaluate(async () => {
+    const context = new AudioContext(); await context.resume();
+    const source = context.createMediaStreamSource(document.querySelector('video').srcObject);
+    const analyser = context.createAnalyser(); analyser.fftSize = 256; source.connect(analyser);
+    const samples = new Float32Array(256); let peak = 0;
+    for (let i = 0; i < 100 && peak < .01; i++) { await new Promise(resolve => setTimeout(resolve, 40)); analyser.getFloatTimeDomainData(samples); peak = Math.max(...samples.map(Math.abs)); }
+    source.disconnect(); await context.close(); return peak;
+  });
+  assert.ok(peak > .01, 'Windows PCM audio should survive worklet downmix, resampling and WebRTC transmission');
+  results.push('Native 44.1 kHz eight-channel PCM crosses the audio worklet and reaches a peer as audible stereo');
+  await nativePeer.locator('#share-button').click();
+  assert.ok(await nativePeer.evaluate(() => nativeStops > 0));
+  await alice.waitForFunction(() => document.querySelectorAll('video').length === 0);
+  results.push('Stopping sharing sends native audio-stop and releases the remote player');
+  await alice.locator('#leave-button').click();
   assert.deepEqual(errors, []);
   await writeFile('artifacts/e2e-results.json', JSON.stringify({ passed: results, browserErrors: errors, encoderParameters: params }, null, 2));
   console.log(results.map((r, i) => `${i + 1}. PASS ${r}`).join('\n'));

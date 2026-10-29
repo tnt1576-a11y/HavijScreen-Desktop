@@ -1,24 +1,8 @@
-/* Keep the full control panel visible on a typical 1080p Windows desktop. */
-@media (max-height:950px) {
-  .topbar{height:74px}
-  .workspace{min-height:calc(100vh - 114px)}
-  .room-panel,.controls-panel{padding-top:24px;padding-bottom:22px}
-  .controls-panel h2{font-size:21px;margin:18px 0 20px}
-  .control-section{margin-bottom:18px}
-  .source-option{padding-top:12px;padding-bottom:10px;gap:7px}
-  .control-help{margin-top:8px;font-size:9px}
-  .toggle-row{padding:12px 0}
-  .stream-action{padding-top:20px}
-  .controls-panel .field-label{margin-bottom:9px}
-  .controls-panel select{padding-top:10px;padding-bottom:10px}
-  .controls-panel .quality-caption{margin-top:7px}
-  .stage-panel{padding-top:24px;padding-bottom:16px}
-  .stage-heading{margin-bottom:20px}
-  .theater{min-height:370px}
-  .empty-state{padding-top:30px;padding-bottom:30px}
-  .screen-illustration{margin-bottom:33px}
-  .stage-meta{margin-top:13px;margin-bottom:18px}
-  .stats-bar{padding-top:14px;padding-bottom:14px}
-  .stage-note{margin-top:13px}
-  footer{height:40px}
+@media(max-height:800px){
+  .topbar{height:60px}
+  .workspace{min-height:calc(100vh - 60px)}
+  .stage-panel,.room-panel,.controls-panel{padding-top:22px;padding-bottom:20px}
+  .theater{min-height:350px}
+  .stage-meta{margin-top:12px;margin-bottom:15px}
+  .stats-bar{padding-top:14px}
 }
