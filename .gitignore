@@ -1,0 +1,6 @@
+/vendor/
+/dist/
+/artifacts/
+/node_modules/
+*.user
+.env*

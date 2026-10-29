@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <meta name="color-scheme" content="dark">
+  <title>Drift · Screen sharing, just between you</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="compact.css">
+  <script type="module" src="main.mjs"></script>
+</head>
+<body>
+  <svg class="symbols" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-screen" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 8h18m-14-3h.01M10 5h.01"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="m10 13 4-4m-6 6-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 2 1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(1 1)"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5zm4 4a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12S6 5 12 5s10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M15 8V3H3v13h5"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-9 12h7l-1 8 10-12h-7z"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></symbol>
+  </defs></svg>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">d<span>↗</span></span><span>drift<span class="brand-period">.</span></span><span class="version">PREVIEW 0.1</span></div>
+    <div class="top-center"><span class="status-dot"></span><span id="top-status">Your private corner of the internet</span></div>
+    <button class="text-button" id="about-button"><svg><use href="#i-shield"/></svg> Private by design</button>
+  </header>
+  <main class="workspace">
+    <aside class="room-panel">
+      <div class="section-label">YOUR SPACE <span id="room-count">1 / 4</span></div>
+      <h1>Better together.</h1><p class="subtle intro">Same game. Same moment.<br>Even miles apart.</p>
+      <label class="field-label" for="display-name">YOUR NAME</label>
+      <input id="display-name" maxlength="32" autocomplete="off" placeholder="Your name" value="Player">
+      <div class="people-label"><span>IN THE ROOM</span><span class="tiny-dot"></span></div>
+      <div class="person self"><div class="avatar">Y</div><div><strong id="self-name">You</strong><small id="self-role">Room host</small></div><span class="person-state">YOU</span></div>
+      <div id="people"></div>
+      <button class="invite-button" id="invite-button"><svg><use href="#i-plus"/></svg> Invite someone <span>↗</span></button>
+      <button class="join-button" id="join-button"><svg><use href="#i-link"/></svg> Join a friend's room</button>
+      <div class="room-bottom"><div class="connection-symbol">↔</div><strong>Just you and your people.</strong><p>No accounts. No streaming server.<br>Your stream goes peer to peer.</p><button class="text-button danger-text" id="leave-button" hidden>Leave room</button></div>
+    </aside>
+    <section class="stage-panel">
+      <div class="stage-heading"><div><span class="eyebrow">THE HANGOUT</span><h2 id="stage-title">Make it a shared moment.</h2></div><span class="connection-pill" id="connection-pill"><span></span> Ready when you are</span></div>
+      <div class="theater" id="theater">
+        <div class="stage-grid"></div>
+        <div class="empty-state" id="empty-state"><div class="screen-illustration"><div class="illustration-top"><i></i><i></i><i></i></div><div class="illustration-center"><svg><use href="#i-arrow"/></svg></div><span class="floating-cursor">↖</span><div class="illustration-foot"></div></div><span class="eyebrow orange">GOOD TIMES, SHARED LIVE</span><h3>A front-row seat.<br>From anywhere.</h3><p>Share your next clutch, explore a new world,<br>or just show a friend what you're up to.</p><button class="primary-button" id="hero-share"><svg><use href="#i-screen"/></svg> Share your screen <svg><use href="#i-arrow"/></svg></button><small>You choose exactly what they see.</small></div>
+        <div id="videos" class="videos" hidden></div>
+        <div class="sharing-banner" id="sharing-banner" hidden><span class="status-dot"></span><span id="sharing-label">You're sharing your screen</span><button id="banner-stop">Stop sharing</button></div>
+        <div class="theater-corner top-left"></div><div class="theater-corner bottom-right"></div>
+      </div>
+      <div class="stage-meta"><span><svg><use href="#i-shield"/></svg> Encrypted peer-to-peer media</span><span><svg><use href="#i-bolt"/></svg> Built to stay out of your game's way</span></div>
+      <div class="stats-bar"><div><span>STREAM</span><strong id="stat-quality">Not sharing</strong></div><div><span>UPLOAD</span><strong id="stat-upload">— <small>Mbps</small></strong></div><div><span>ROUND TRIP</span><strong id="stat-latency">— <small>ms</small></strong></div><div><span>ENCODER</span><strong id="stat-encoder">Waiting for a viewer</strong></div><div><span>WATCHING YOU</span><strong id="stat-viewers">0 <small>people</small></strong></div></div>
+      <p class="stage-note" id="stage-note">Start a stream, then invite a friend. No one receives video until they choose to watch.</p>
+    </section>
+    <aside class="controls-panel">
+      <div class="section-label">YOUR STREAM <svg><use href="#i-screen"/></svg></div>
+      <h2>A little setup.<br>A lot to share.</h2>
+      <div class="control-section"><label class="field-label">WHAT TO SHARE</label><div class="source-options"><button class="source-option selected" id="source-monitor" aria-pressed="true"><svg><use href="#i-screen"/></svg><span>Monitor</span></button><button class="source-option" id="source-window" aria-pressed="false"><svg><use href="#i-window"/></svg><span>Application</span></button></div><p class="control-help" id="source-help">Pick a display in the Windows capture picker.</p></div>
+      <div class="control-section"><label class="field-label" for="quality">STREAM QUALITY</label><select id="quality"><option value="efficient">Efficient · 720p / 30 fps</option><option value="balanced">Balanced · 1080p / 30 fps</option><option value="fluid">Fluid · 1080p / 60 fps</option><option value="crisp">Crisp · 1440p / 60 fps</option></select><div class="quality-caption"><svg><use href="#i-bolt"/></svg><span id="quality-hint">A lighter load. More room for your game.</span></div></div>
+      <div class="control-section"><div class="label-line"><label class="field-label" for="bandwidth">TOTAL VIDEO UPLOAD</label><span id="bandwidth-value">8 Mbps</span></div><input type="range" id="bandwidth" min="1" max="30" step="1" value="8"><div class="range-labels"><span>1 Mbps</span><span>30 Mbps</span></div><p class="control-help">Split across viewers. Audio and network overhead use a little extra.</p></div>
+      <div class="toggle-row"><svg><use href="#i-audio"/></svg><div><label for="audio">Share audio</label><small>Enable audio in the capture picker</small></div><label class="switch"><input type="checkbox" id="audio" checked><span></span></label></div>
+      <div class="toggle-row"><svg><use href="#i-eye"/></svg><div><label for="preview">Local preview</label><small>Keep off to save rendering work</small></div><label class="switch"><input type="checkbox" id="preview"><span></span></label></div>
+      <div class="capture-note"><svg><use href="#i-info"/></svg><p>Audio availability depends on your Windows capture source. System audio may include other apps.</p></div>
+      <div class="stream-action"><button class="primary-button wide" id="share-button"><svg><use href="#i-screen"/></svg><span>Start sharing</span><svg><use href="#i-arrow"/></svg></button><p id="shortcut-hint">Windows asks before any capture starts.</p></div>
+    </aside>
+  </main>
+  <footer><span><span class="tiny-dot"></span> NO ACCOUNTS. NO AUDIENCE. JUST YOUR PEOPLE.</span><span>Made for the moments between the miles. <span class="orange">↗</span></span></footer>
+  <dialog id="pair-dialog"><div class="dialog-head"><div><span class="eyebrow orange" id="pair-eyebrow">BRING SOMEONE ALONG</span><h2 id="pair-title">Invite a friend.</h2></div><button class="icon-button" id="pair-close" aria-label="Close dialog"><svg><use href="#i-close"/></svg></button></div><p class="dialog-description" id="pair-description"></p><div id="network-option"><label class="check-label"><input id="stun" type="checkbox" checked> Use public STUN discovery for internet connections</label><p class="control-help">Discovery only; no video passes through STUN. Turn off for LAN-only use.</p></div><div id="code-output-section" hidden><label class="field-label" for="code-output" id="code-output-label">YOUR INVITATION</label><textarea id="code-output" readonly spellcheck="false" aria-label="Your pairing code"></textarea><button class="secondary-button wide" id="copy-code"><svg><use href="#i-copy"/></svg> Copy code</button><p class="control-help" id="code-warning">Contains connection details. Send privately to someone you trust. Expires after 10 minutes.</p></div><div id="code-input-section" hidden><label class="field-label" for="code-input" id="code-input-label">YOUR FRIEND'S CODE</label><textarea id="code-input" spellcheck="false" placeholder="Paste the complete code here…" aria-label="Friend's pairing code"></textarea></div><p class="dialog-error" id="pair-error" role="alert"></p><button class="primary-button wide" id="pair-action">Create invitation <svg><use href="#i-arrow"/></svg></button><button class="text-button" id="cancel-invite" hidden>Cancel this invitation</button></dialog>
+  <dialog id="about-dialog"><div class="dialog-head"><div><span class="eyebrow orange">SMALL APP. CLEAR BOUNDARIES.</span><h2>Your screen, your call.</h2></div><button class="icon-button" id="about-close" aria-label="Close dialog"><svg><use href="#i-close"/></svg></button></div><div class="about-items"><p><strong>Direct and encrypted.</strong> WebRTC encrypts media and control channels between peers. Pairing codes establish the connection; send them privately. Peers learn each other's network address.</p><p><strong>No game hooks.</strong> Capture uses the runtime's screen-capture picker. Drift does not inject into games, install drivers, read game memory, or draw overlays. Compatibility depends on each game and its anti-cheat policy.</p><p><strong>Honest about performance.</strong> Capture and encoding use resources. Start at 720p / 30 fps. H.264 is preferred; hardware encoding depends on the runtime, GPU and drivers. Stats show what the runtime reports.</p><p><strong>No hosted room service.</strong> Exchange an invite and reply through a trusted channel. Optional public STUN discovers network routes. Some routers need a TURN relay; this version has no relay service. Rooms support up to four people, and close when the host leaves.</p><p><strong>Nothing recorded.</strong> No recordings, analytics, accounts, or stored pairing codes. Only your name and stream preferences are saved on this PC.</p></div></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

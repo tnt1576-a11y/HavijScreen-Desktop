@@ -1,0 +1,14 @@
+{
+  "name": "drift-screen-share",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Serverless, peer-to-peer screen sharing for Windows.",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test tests/protocol.test.mjs",
+    "test:e2e": "node tests/e2e.mjs",
+    "build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1"
+  },
+  "engines": { "node": ">=22" }
+}
