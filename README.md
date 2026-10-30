@@ -2,77 +2,83 @@
 
 <img src="app/assets/carrot.png" width="88" alt="HavijScreen carrot">
 
-A small Windows desktop app for sharing gameplay with friends. Share a short room code, approve their join request, and stream directly between your PCs. No account or server of your own is required.
+A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.2.0/HavijScreen-0.2.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.2.0)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.3.0/HavijScreen-0.3.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.3.0)
 
 ## Run on Windows
 
-Extract **HavijScreen-0.2.0-win-x64.zip**, keep its files together, and run **HavijScreen.exe**. Requires 64-bit Windows 10/11, .NET Framework 4.8, and the [Microsoft Edge WebView2 Evergreen Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). No administrator permission is needed to run HavijScreen. The portable app uses the system WebView2 runtime rather than shipping a separate Chromium installation. Both people should use the current version.
+Extract the entire ZIP and run **HavijScreen.exe**. Keep its files and `runtime` folder together. No installation, administrator access, WebView2, browser, Python or separate .NET installation is required.
 
-This is an unsigned development preview. It has not been certified by an anti-cheat vendor or benchmarked across gaming systems.
+Use **64-bit Windows 11** with a supported NVIDIA, AMD or Intel GPU and current graphics drivers. Sending requires a hardware H.264 encoder; receiving requires D3D11 H.264 decoding. HavijScreen reports unavailable hardware instead of silently using CPU encoding. Application audio requires Windows build 20348 or newer.
 
-## Connect to a friend
+Both people must use **0.3.0 or newer**. Native rooms cannot join the older WebView2 version. This is an unsigned development preview.
 
-1. Both people open HavijScreen and choose a display name.
-2. The host chooses **Invite someone**, then **Create room code**. Send the code privately to your friend.
-3. The friend chooses **Join a friend's room**, enters the 16-character code, and chooses **Request to join**. Spaces, dashes and letter case do not matter.
-4. The host sees the person's name in the room sidebar and chooses **Accept** or **Decline**. Connection details are exchanged automatically after approval; there is no reply to send back.
-5. Either person chooses **Start sharing** and selects a monitor or application in the capture picker. The other chooses **Watch stream** beside their name. Choose **Enable sound** on the player to hear shared audio.
+## Share with a friend
 
-The same room code can invite up to three friends. Keep it private and only approve people you expect. Pending requests can wait up to ten minutes without starting a peer connection. Codes stay in memory while the host keeps them enabled; they are not saved between app sessions. **Disable room code** stops new requests without ending existing streams. Rooms support up to four people. The host can remove participants; leaving as host closes the room.
+1. Choose your display name.
+2. The host selects **Invite someone → Create room code** and sends the code privately.
+3. Their friend selects **Join a room**, enters the code and chooses **Request to join**. Letter case, spaces and dashes do not matter.
+4. The host chooses **Accept** or **Decline** in the room sidebar. There is no reply code to send back.
+5. Either person selects **Start sharing**, chooses an **Application** or **Entire screen**, and selects audio in the same picker.
+6. Their friend chooses **Watch stream**. Playback starts muted; choose **Enable sound** to listen.
 
-For pairing without the public connection service, choose **Use manual codes instead** on both PCs. The host creates an invitation, the friend pastes it and sends the generated reply back, and the host accepts that reply. The friend then chooses **Connect** after the host accepts. Copy/Paste buttons hide the long strings; **View code** and **Paste manually** remain available. Manual invitations are single-use and valid for ten minutes. Use a fresh invitation for each friend.
+Rooms support four people. The host approves each person and can remove participants. Pending requests can wait up to ten minutes without opening a peer connection. **Disable room code** stops invitations while existing streams continue. Leaving as host closes the room. Room codes are not saved between sessions.
 
-## Quality, audio and performance
+**Stop sharing** ends capture. **Ctrl+Shift+S** stops sharing globally when the shortcut is available; an in-app shortcut remains available if Windows cannot register it.
 
-- **Efficient:** up to 720p, 30 fps, 2.5 Mbps video per viewer. Start here when playing a demanding game.
-- **Balanced:** up to 1080p, 30 fps, 5 Mbps per viewer.
-- **Fluid:** up to 1080p, 60 fps, 8 Mbps per viewer.
-- **Crisp:** up to 1440p, 60 fps, 12 Mbps per viewer.
+## Application and screen audio
 
-Actual resolution and frame rate depend on the source and runtime. Each viewer gets a direct connection using the selected quality preset. WebRTC adapts to network conditions. Each additional viewer can add encoding work and upload use. Capture is shared across viewers; encoding is managed by WebRTC per connection.
+**Application → Share app audio** captures the selected application's Windows process and its child processes. Other applications' sounds are excluded. Separate windows belonging to the same application or process tree may share audio; for example, browser tabs are not independent audio sources. Protected audio and some applications may not support capture.
 
-No video is sent to a participant until they choose to watch. Local preview defaults to off. Minimize HavijScreen to pause local video playback and ask WebView2 to reduce memory use while the outgoing stream continues. The upload and round-trip figures come from WebRTC statistics; round trip is network RTT, not total glass-to-glass video latency. Encoder information is shown only if reported by the runtime. H.264 is preferred, but hardware encoding is not guaranteed. The small download does not imply a tiny memory footprint: WebView2 runs multiple processes, and memory use depends on the runtime, GPU, capture picker and active streams.
+**Entire screen → Share all system audio** includes sounds from other apps and is off by default. It requires an explicit selection. If application audio fails, HavijScreen stops the share and reports the failure. It never substitutes whole-PC audio. You can choose the source again with audio unchecked to share video only.
 
-Select the monitor or application and **Share with system audio** in the capture picker. These choices are made in one place. Available audio sources depend on Windows and WebView2. System audio can include sounds from other applications. The stream banner shows **Audio on** or **Video only**. HavijScreen never requests microphone or camera access.
+No microphone or camera access is requested. Windows may show its capture border around the selected source. Protected, minimized or exclusive-fullscreen windows may not capture correctly; borderless window mode can help.
 
-If the browser cannot start system audio, HavijScreen offers **Use Windows audio capture?** Choose **Choose source & share with audio**, then select the screen or window once more. HavijScreen captures the default playback device through Windows WASAPI and converts multichannel audio to stereo for sharing. This fallback includes all audio played on the default output device. It stops when sharing stops and requires no audio driver or device-setting changes. Cancelling either picker cancels sharing.
+## Quality and game performance
 
-The title bar matches the app. Drag it to move the window, double-click it to maximize or restore, or use its minimize, maximize and close buttons.
+| Preset | Resolution | Frame rate | Target video upload per viewer |
+| --- | --- | --- | --- |
+| Efficient | 720p | 30 fps | 2.5 Mbps |
+| Balanced | 1080p | 30 fps | 5 Mbps |
+| Fluid | 1080p | 60 fps | 8 Mbps |
+| Crisp | 1440p | 60 fps | 12 Mbps |
 
-The carrot appears in the app header, executable and taskbar. A native startup view appears immediately while the Windows web runtime loads, then switches to the ready interface.
+Start with Efficient for a demanding game. Actual frame rate depends on the source, GPU and network. Choose a lower preset if the connection cannot carry the target bitrate; this preview uses fixed quality targets rather than automatically changing quality.
 
-Choose **Stop sharing** at any time. **Ctrl+Shift+S** stops capture globally when Windows permits HavijScreen to register that shortcut; the app displays whether it is available. Closing HavijScreen releases capture and disconnects peers.
+Capture, conversion and encoding use native Windows and GPU APIs. One hardware encode is shared among all viewers; each additional viewer adds upload and connection work. Three viewers at the Fluid preset can need roughly 24 Mbps of video upload, plus audio and network overhead.
 
-## Networks
+Capture and encoding start only when someone watches and stop when the last viewer stops watching. There is no local preview consuming rendering work. Minimizing HavijScreen pauses incoming streams and resumes them when restored; outgoing sharing continues. The status area shows upload, encoder and viewer count.
 
-Short room codes use the free public [PeerJS Cloud signaling service](https://peerjs.com/server/getting-started) at `0.peerjs.com` over secure WebSockets. It delivers encrypted join requests and connection details; it does not carry screen or audio streams. HavijScreen encrypts these messages before sending them, and each approved guest gets a separate connection key. The service can see network addresses, timing and opaque routing identifiers. No account, media server or recording server is used. Subsequent group pairing travels through the host's encrypted WebRTC control channels.
+The UI uses native Windows controls. The media engine uses Windows Graphics Capture, D3D11, WASAPI process loopback, hardware H.264 and Opus through GStreamer. Raw captured video stays in the GPU capture/convert/encode path; the app distributes the encoded packets. Download size is larger than the older web version because the native runtimes are included.
 
-Public service availability is outside HavijScreen's control. If it disconnects after a room has connected, existing streams continue. Reopen **Invite someone** and choose **Reconnect room code** to accept new requests. Manual codes remain available without this service.
+Capture, encoding and playback still consume resources. GPU contention, drivers and game settings affect FPS. HavijScreen has not been benchmarked across games or certified by anti-cheat vendors, and cannot promise zero FPS loss or universal compatibility. It does not inject DLLs into games, hook game graphics APIs, read game memory, install drivers or add an in-game overlay.
 
-**Use public STUN discovery** is enabled by default and contacts `stun.cloudflare.com:3478` to discover routes through your router. STUN carries discovery traffic, never your video. Turn it off for LAN-only media. Short room codes still contact PeerJS Cloud when STUN is off; choose manual codes as well to pair without a public setup service. Rejoin with a fresh connection when network conditions change.
+## Connection and privacy
 
-Direct connections are not possible on every network. Symmetric NAT, carrier-grade NAT, enterprise firewalls and blocked UDP may prevent pairing. This version does not include a TURN relay. A trusted shared LAN or an independently configured VPN can provide another direct route. HavijScreen does not change VPN, router, firewall, or Windows security settings. Windows may request firewall access for WebView2.
+Short room codes use the public [PeerJS Cloud service](https://peerjs.com/server/getting-started) at `0.peerjs.com` over secure WebSockets for connection setup. Screen and audio travel directly between participants. Setup messages are encrypted with AES-GCM before sending; approved guests use separate P-256 ECDH-derived keys. Media and control traffic use WebRTC's encrypted transports.
 
-## Privacy and games
+The service sees IP addresses, timing and opaque routing identifiers. It receives a derived room identifier, not the 80-bit room code, and cannot read encrypted setup messages without the code or connection keys. Share codes privately and approve only expected people. Display names do not prove identity. Connected peers can see each other's network addresses, and viewers can use other tools to record what they receive.
 
-Media and control channels use WebRTC's encrypted transports. Room codes contain 80 random bits; the public service receives a derived identifier rather than the code. Setup messages use AES-GCM, and approved connections use separate ECDH-derived keys. Manual replies are authenticated with a one-time secret from their invitation. Pairing authenticity depends on sharing codes privately and approving the intended person; display names alone do not prove identity. Connected peers can see each other's network addresses. The host is trusted to admit and remove participants. Anyone watching can use separate recording tools.
+**Public STUN discovery for internet connections** contacts `stun.cloudflare.com:3478` to find direct network routes. STUN does not carry media. Turn it off when creating a room if you only need a shared LAN or an independently configured VPN. Room-code setup still contacts PeerJS Cloud. There is no manual-code pairing in this native preview.
 
-HavijScreen uses the runtime's capture picker outside the game process. It does not inject DLLs, hook graphics APIs, read game memory, install drivers or show an in-game overlay. Capture and encoding still consume resources. Anti-cheat rules and game capture restrictions vary; the app cannot promise universal compatibility or zero FPS loss. Protected or minimized windows may not capture correctly. Borderless window mode often provides a more usable capture source.
+Public service availability is outside HavijScreen's control. If it disconnects after joining, existing streams continue. Reopen **Invite someone → Reconnect room code** to accept new requests.
 
-No video, room codes, pairing keys, room histories or credentials are persisted by the app. Only the name and stream preferences are stored locally in WebView2's app profile under `%LOCALAPPDATA%\HavijScreen`. The WebView2 runtime manages its own local caches and updates. Copy/Paste actions use the system clipboard, which may have history or synchronization enabled in Windows.
+Some networks block direct connections, including certain carrier-grade NAT and enterprise networks. This preview has no TURN relay. HavijScreen does not change firewall, router, VPN, driver or security settings. Windows may ask you to allow the app through the firewall.
 
-## Develop
+The app does not save screen recordings, audio, room histories, codes or pairing keys. Name, quality and STUN preferences are stored in `%LOCALAPPDATA%\HavijScreen\Native\preferences.json`. The native runtime also stores a local plugin registry. Copying a code uses the Windows clipboard, which may have history or synchronization enabled.
 
-The UI and WebRTC engine are vanilla HTML/CSS/JavaScript, with no production npm dependencies. The native host is C# WinForms and .NET Framework 4.8 with the official WebView2 SDK. Windows audio fallback uses [NAudio](https://github.com/naudio/NAudio), with its MIT license included in the package.
+## Build
+
+On Windows x64, with PowerShell and internet access:
 
 ```powershell
-npm start             # Loopback-only browser preview on http://127.0.0.1:4317
-npm test              # Pairing protocol and capture recovery tests
-npm run build         # Compile and zip the Windows desktop app
+.\scripts\prepare-native-sdk.ps1
+.\scripts\prepare-native.ps1
+.\scripts\prepare-native-notices.ps1
+.\scripts\build-native.ps1
 ```
 
-The build downloads the pinned Microsoft WebView2 SDK and NAudio dependencies to `vendor/` if necessary and compiles using the Windows .NET Framework compiler. It produces `dist/HavijScreen/HavijScreen.exe` and `dist/HavijScreen-0.2.0-win-x64.zip`. No Node.js process or local server is required to run the desktop app.
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.3.0/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
-The browser integration suite (`npm run test:e2e`) requires Playwright. Install it locally with `npm install --no-save playwright`, then `npx playwright install chromium`, or set `DRIFT_PLAYWRIGHT_PATH` to an existing Playwright package and `DRIFT_BROWSER_PATH` to a Chromium executable. It uses an isolated mock signaling service and synthetic media. `node tests/cloud-smoke.mjs` separately checks encrypted setup against the real public service without capturing screen or audio.
+`npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

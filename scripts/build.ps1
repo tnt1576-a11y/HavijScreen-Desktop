@@ -44,7 +44,7 @@ Copy-Item -LiteralPath (Join-Path $sdkPath 'runtimes\win-x64\native\WebView2Load
 Copy-Item -LiteralPath (Join-Path $projectRoot 'app') -Destination $output -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $output -Force
 Copy-Item -LiteralPath (Join-Path $sdkPath 'LICENSE.txt') -Destination (Join-Path $output 'WebView2-LICENSE.txt') -Force
-$version = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
+$version = '0.2.0'
 $zipPath = Join-Path $projectRoot "dist\HavijScreen-$version-win-x64.zip"
 Compress-Archive -Path $output -DestinationPath $zipPath -Force
 Get-FileHash -LiteralPath $zipPath -Algorithm SHA256 | Format-List
