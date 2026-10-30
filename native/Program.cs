@@ -23,7 +23,10 @@ internal static class Program
                 string json = JsonSerializer.Serialize(result,new JsonSerializerOptions { WriteIndented = true });
                 if (report != null) File.WriteAllText(report,json); Console.WriteLine(json); return 0;
             }
-            Application.Run(new MainForm(runtime));
+            using var window = new MainForm(runtime);
+            string[]? size = Option(args,"window-size")?.Split('x');
+            if(size?.Length==2&&int.TryParse(size[0],out int width)&&int.TryParse(size[1],out int height)) window.ClientSize=new Size(Math.Clamp(width,1020,3840),Math.Clamp(height,700,2160));
+            Application.Run(window);
             return 0;
         }
         catch (Exception error)

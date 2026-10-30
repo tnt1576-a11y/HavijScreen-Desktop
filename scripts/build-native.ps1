@@ -1,6 +1,8 @@
-param([string]$OutputDirectory = 'dist\native-0.3.0\HavijScreen', [switch]$SkipZip)
+param([string]$OutputDirectory = '', [switch]$SkipZip)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$version = ([xml](Get-Content (Join-Path $projectRoot 'native\HavijScreen.Native.csproj') -Raw)).Project.PropertyGroup.Version
+if (-not $OutputDirectory) { $OutputDirectory = "dist\native-$version\HavijScreen" }
 & (Join-Path $PSScriptRoot 'prepare-native-sdk.ps1')
 if (-not (Test-Path (Join-Path $projectRoot 'vendor\native-runtime\packages.json'))) { & (Join-Path $PSScriptRoot 'prepare-native.ps1') }
 $runtime = Join-Path $projectRoot 'vendor\native-runtime'
@@ -94,7 +96,7 @@ $files = Get-ChildItem -LiteralPath $output -File -Recurse | Sort-Object FullNam
 }
 $files | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $output 'files.json') -Encoding utf8
 if (-not $SkipZip) {
-  $zip=Join-Path $projectRoot 'dist\HavijScreen-0.3.0-win-x64.zip'
+  $zip=Join-Path $projectRoot "dist\HavijScreen-$version-win-x64.zip"
   Compress-Archive -LiteralPath $output -DestinationPath $zip -Force
   Get-FileHash -LiteralPath $zip -Algorithm SHA256
 }

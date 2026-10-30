@@ -1,6 +1,6 @@
 {
   "name": "havijscreen",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Peer-to-peer screen sharing for Windows with short room codes and host approval.",
