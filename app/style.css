@@ -129,6 +129,18 @@ textarea{height:95px;resize:vertical;font-family:Consolas,monospace;font-size:10
 .secondary-button svg{height:14px;width:14px}
 #code-input-section{margin-top:21px}
 #code-output-section{margin-top:10px}
+.transfer-status{font-size:12px;color:#c3cfb7;margin:12px 0}
+#pair-dialog details{margin-top:12px;color:#8f9c84;font-size:10px}
+#pair-dialog summary{cursor:pointer;padding:5px 0;width:fit-content}
+#pair-dialog details textarea{margin-top:8px}
+#room-code-output,#room-code-input{font-family:Consolas,monospace;font-size:22px;letter-spacing:1px;padding:15px 10px;text-align:center;margin-bottom:12px}
+#manual-pairing{display:block;width:100%;margin-top:12px;font-size:10px}
+.join-request{border:1px solid #536348;border-radius:5px;background:#222b1e;padding:10px;margin:10px 0;font-size:11px;overflow-wrap:anywhere}
+.join-request strong{display:block;font-size:12px}
+.join-request small{display:block;color:#94a186;margin-top:4px}
+.request-actions{display:flex;gap:7px;margin-top:9px}
+.request-actions button{font-size:10px;padding:6px 8px;border:1px solid #65774e;border-radius:4px;background:#344428;color:#d7e3cb}
+.request-actions .decline-request{background:transparent;border-color:#635043;color:#d0aa91}
 .dialog-error{font-size:11px;color:#e6a389;line-height:1.7;min-height:10px;margin:12px 0}
 #toast{position:fixed;bottom:25px;left:50%;transform:translateX(-50%);max-width:580px;border:1px solid #677451;background:#303d26;color:#dae6ca;box-shadow:0 8px 35px #0007;padding:14px 21px;border-radius:6px;z-index:20;font-size:12px;line-height:1.6}
 body.native-minimized .theater{visibility:hidden}

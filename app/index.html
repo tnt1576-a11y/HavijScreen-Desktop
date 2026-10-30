@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src wss://0.peerjs.com; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
   <meta name="color-scheme" content="dark">
   <title>HavijScreen</title>
   <link rel="icon" type="image/png" href="assets/carrot.png">
@@ -29,7 +29,7 @@
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/></symbol>
   </defs></svg>
   <header class="topbar">
-    <div class="brand"><img class="brand-icon" src="assets/carrot.png" width="40" height="44" alt="" draggable="false"><span>HavijScreen</span><span class="version">0.1.3</span></div>
+    <div class="brand"><img class="brand-icon" src="assets/carrot.png" width="40" height="44" alt="" draggable="false"><span>HavijScreen</span><span class="version">0.2.0</span></div>
     <div class="window-controls" id="window-controls" hidden>
       <button id="window-minimize" aria-label="Minimize" title="Minimize"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
       <button id="window-maximize" aria-label="Maximize" title="Maximize"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx=".5"/></svg></button>
@@ -44,8 +44,11 @@
       <div class="people-label"><span>IN THE ROOM</span><span class="tiny-dot"></span></div>
       <div class="person self"><div class="avatar">Y</div><div><strong id="self-name">You</strong><small id="self-role">Room host</small></div><span class="person-state">YOU</span></div>
       <div id="people"></div>
+      <div id="join-requests" aria-live="polite"></div>
+      <p id="lobby-status" class="control-help" hidden></p>
       <button class="invite-button" id="invite-button"><svg><use href="#i-plus"/></svg> Invite someone <span>↗</span></button>
       <button class="join-button" id="join-button"><svg><use href="#i-link"/></svg> Join a friend's room</button>
+      <button class="join-button" id="finish-join" hidden>Finish joining</button>
       <button class="text-button danger-text" id="leave-button" hidden>Leave room</button>
     </aside>
     <section class="stage-panel">
@@ -66,7 +69,26 @@
       <div class="stream-action"><button class="primary-button wide" id="share-button"><svg><use href="#i-screen"/></svg><span>Start sharing</span><svg><use href="#i-arrow"/></svg></button><p id="shortcut-hint">Windows asks before any capture starts.</p></div>
     </aside>
   </main>
-  <dialog id="pair-dialog"><div class="dialog-head"><div><span class="eyebrow orange" id="pair-eyebrow">BRING SOMEONE ALONG</span><h2 id="pair-title">Invite a friend.</h2></div><button class="icon-button" id="pair-close" aria-label="Close dialog"><svg><use href="#i-close"/></svg></button></div><p class="dialog-description" id="pair-description"></p><div id="network-option"><label class="check-label"><input id="stun" type="checkbox" checked> Use public STUN discovery for internet connections</label><p class="control-help">Discovery only; no video passes through STUN. Turn off for LAN-only use.</p></div><div id="code-output-section" hidden><label class="field-label" for="code-output" id="code-output-label">YOUR INVITATION</label><textarea id="code-output" readonly spellcheck="false" aria-label="Your pairing code"></textarea><button class="secondary-button wide" id="copy-code"><svg><use href="#i-copy"/></svg> Copy code</button><p class="control-help" id="code-warning">Contains connection details. Send privately to someone you trust. Expires after 10 minutes.</p></div><div id="code-input-section" hidden><label class="field-label" for="code-input" id="code-input-label">YOUR FRIEND'S CODE</label><textarea id="code-input" spellcheck="false" placeholder="Paste the complete code here…" aria-label="Friend's pairing code"></textarea></div><p class="dialog-error" id="pair-error" role="alert"></p><button class="primary-button wide" id="pair-action">Create invitation <svg><use href="#i-arrow"/></svg></button><button class="text-button" id="cancel-invite" hidden>Cancel this invitation</button></dialog>
+  <dialog id="pair-dialog">
+    <div class="dialog-head"><div><span class="eyebrow orange" id="pair-eyebrow">INVITE</span><h2 id="pair-title">Invite a friend</h2></div><button class="icon-button" id="pair-close" aria-label="Close dialog"><svg><use href="#i-close"/></svg></button></div>
+    <p class="dialog-description" id="pair-description"></p>
+    <div id="network-option"><label class="check-label"><input id="stun" type="checkbox" checked> Use public STUN discovery for internet connections</label><p class="control-help">Discovery only; no video passes through STUN. Turn off for LAN-only media.</p></div>
+    <div id="short-code-output-section" hidden><label class="field-label" for="room-code-output">ROOM CODE</label><input id="room-code-output" readonly spellcheck="false" aria-label="Room code"><button id="copy-room-code" class="secondary-button wide">Copy room code</button><p class="control-help">Keep this private. Only approve people you expect.</p></div>
+    <div id="short-code-input-section" hidden><label class="field-label" for="room-code-input">ROOM CODE</label><input id="room-code-input" maxlength="24" spellcheck="false" autocomplete="off" placeholder="ABCD-EFGH-JKLM-NPQR" aria-label="Friend's room code"></div>
+    <div id="code-output-section" hidden>
+      <p class="transfer-status" id="code-output-label">Invitation ready</p>
+      <button class="secondary-button wide" id="copy-code"><svg><use href="#i-copy"/></svg><span id="copy-code-label">Copy invitation</span></button>
+      <details id="code-output-details"><summary>View code</summary><textarea id="code-output" readonly spellcheck="false" aria-label="Your pairing code"></textarea></details>
+      <p class="control-help" id="code-warning">Private and single-use. Expires after 10 minutes.</p>
+    </div>
+    <div id="code-input-section" hidden>
+      <label class="field-label" id="code-input-label">YOUR FRIEND'S CODE</label>
+      <button class="secondary-button wide" id="paste-code">Paste invitation</button>
+      <p class="transfer-status" id="input-status" hidden></p>
+      <details id="code-input-details"><summary>Paste manually</summary><textarea id="code-input" spellcheck="false" placeholder="Paste the complete code here…" aria-label="Friend's pairing code"></textarea></details>
+    </div>
+    <p class="dialog-error" id="pair-error" role="alert"></p><button class="primary-button wide" id="pair-action">Create room code</button><button class="text-button" id="cancel-invite" hidden>Cancel invitation</button><button class="text-button" id="manual-pairing">Use manual codes instead</button>
+  </dialog>
   <dialog id="capture-error-dialog"><div class="dialog-head"><h2 id="capture-error-title">System audio couldn't start.</h2><button class="icon-button" id="capture-error-close" aria-label="Cancel sharing"><svg><use href="#i-close"/></svg></button></div><p class="dialog-description" id="capture-error-description">You can still share video without audio.</p><button class="primary-button wide" id="retry-video">Share video only</button></dialog>
   <div id="toast" role="status" aria-live="polite" hidden></div>
 </body>

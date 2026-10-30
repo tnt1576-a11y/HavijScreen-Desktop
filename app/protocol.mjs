@@ -58,19 +58,34 @@ export async function decodeInvite(code, now = Date.now()) {
 function isId(value, length = 22) { return typeof value === 'string' && value.length === length && /^[\w-]+$/.test(value); }
 export function validName(value) { return typeof value === 'string' && value.trim().length >= 1 && value.length <= 32 && !/[\x00-\x1f\x7f]/.test(value); }
 export function validSDP(value, type) { return value && value.type === type && typeof value.sdp === 'string' && value.sdp.length < 100000 && value.sdp.startsWith('v=0'); }
+export function deferCandidates(description) {
+  const sections = description.sdp.split(/(?=^m=)/m), candidates = [];
+  const sdp = sections.map((section, index) => {
+    const mid = /^a=mid:([^\r\n]+)/m.exec(section)?.[1] ?? null;
+    return section.split(/\r?\n/).filter(line => {
+      if (line.startsWith('a=candidate:')) {
+        candidates.push({ candidate: line.slice(2), sdpMid: mid, sdpMLineIndex: Math.max(0, index - 1) }); return false;
+      }
+      return line !== 'a=end-of-candidates';
+    }).join('\r\n');
+  }).join('');
+  return { description: { type: description.type, sdp }, candidates };
+}
 async function keyFrom(secret) { return crypto.subtle.importKey('raw', fromBase64(secret), 'AES-GCM', false, ['encrypt', 'decrypt']); }
 export async function encodeReply(payload, secret) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode('drift-reply-v1:' + payload.session) }, await keyFrom(secret), new TextEncoder().encode(JSON.stringify(payload)));
-  return `DRIFT1R.${payload.session}.${toBase64(iv)}.${toBase64(new Uint8Array(data))}`;
+  const compressed = await readLimited(new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('deflate')));
+  const data = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode('drift-reply-v1:' + payload.session) }, await keyFrom(secret), compressed);
+  return `HS2R.${payload.session}.${toBase64(iv)}.${toBase64(new Uint8Array(data))}`;
 }
 export async function decodeReply(code, secret, session) {
   code = String(code).trim();
   const parts = code.split('.');
-  if (code.length > MAX_CODE || parts.length !== 4 || parts[0] !== 'DRIFT1R' || parts[1] !== session) throw new Error('This reply belongs to a different invitation.');
+  if (code.length > MAX_CODE || parts.length !== 4 || !['DRIFT1R', 'HS2R'].includes(parts[0]) || parts[1] !== session) throw new Error('This reply belongs to a different invitation.');
   try {
     const bytes = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: fromBase64(parts[2]), additionalData: new TextEncoder().encode('drift-reply-v1:' + session) }, await keyFrom(secret), fromBase64(parts[3]));
-    const data = JSON.parse(new TextDecoder().decode(bytes));
+    const plaintext = parts[0] === 'HS2R' ? await readLimited(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate'))) : bytes;
+    const data = JSON.parse(new TextDecoder().decode(plaintext));
     if (data.v !== VERSION || data.session !== session || !isId(data.peer) || !isId(data.room) || !validName(data.name) || !validSDP(data.sdp, 'answer')) throw new Error();
     return data;
   } catch { throw new Error('This reply could not be authenticated. Ask your friend to copy it again.'); }

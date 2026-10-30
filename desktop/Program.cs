@@ -92,9 +92,11 @@ namespace HavijScreen {
         core.NewWindowRequested += delegate(object sender, CoreWebView2NewWindowRequestedEventArgs args) { args.Handled = true; };
         core.DownloadStarting += delegate(object sender, CoreWebView2DownloadStartingEventArgs args) { args.Cancel = true; };
         core.PermissionRequested += delegate(object sender, CoreWebView2PermissionRequestedEventArgs args) {
-          // Screen capture uses its own mandatory picker. Never grant microphone,
-          // webcam, location, notifications, or persistent capture permission.
-          args.State = CoreWebView2PermissionState.Deny;
+          // Clipboard reads require the user's Paste button gesture on our
+          // local UI. Screen capture keeps its own mandatory picker.
+          args.State = args.PermissionKind == CoreWebView2PermissionKind.ClipboardRead && args.IsUserInitiated && LocalUri(args.Uri)
+            ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
+          args.SavesInProfile = false;
         };
         core.ScreenCaptureStarting += delegate(object sender, CoreWebView2ScreenCaptureStartingEventArgs args) { if (!LocalUri(core.Source)) args.Cancel = true; };
         core.WebMessageReceived += delegate(object sender, CoreWebView2WebMessageReceivedEventArgs args) {

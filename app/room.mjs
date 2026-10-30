@@ -1,7 +1,7 @@
-import { VERSION, MAX_PEERS, CODE_TTL, randomId, encodeInvite, decodeInvite, encodeReply, decodeReply, validName, validSDP } from './protocol.mjs';
+import { VERSION, MAX_PEERS, CODE_TTL, randomId, encodeInvite, decodeInvite, encodeReply, decodeReply, validName, validSDP, deferCandidates } from './protocol.mjs';
 
-// A room has no HTTP or WebSocket service. Initial SDP is exchanged by the users;
-// subsequent mesh negotiation travels over the host's authenticated data channels.
+// Room owns direct peer connections. Initial SDP arrives through manual codes
+// or Lobby; subsequent mesh negotiation uses the host's data channels.
 export class Room extends EventTarget {
   constructor() {
     super();
@@ -14,7 +14,7 @@ export class Room extends EventTarget {
   get connected() { return [...this.peers.values()].filter(p => p.channel?.readyState === 'open'); }
   get viewers() { return this.connected.filter(p => p.watching); }
   configuration() { return { iceServers: this.stun ? [{ urls: 'stun:stun.cloudflare.com:3478' }] : [], bundlePolicy: 'max-bundle' }; }
-  async createInvite(name, stun) {
+  async createInvite(name, stun, prepared = null) {
     if (!this.isHost) throw new Error('Only the room host can invite someone.');
     this.expireOffers();
     if (this.peers.size >= MAX_PEERS - 1) throw new Error('This room supports four people. Cancel an unused invite to free a place.');
@@ -25,6 +25,7 @@ export class Room extends EventTarget {
     const offer = { peer, session, secret, expires: Date.now() + CODE_TTL };
     this.offers.set(session, offer);
     try {
+      prepared?.({ session, peerId: id });
       await peer.pc.setLocalDescription(await peer.pc.createOffer());
       await gather(peer.pc);
       return { session, code: await encodeInvite({ v: VERSION, type: 'invite', room: this.roomId, host: this.id, peer: id, session, secret, name: this.name, expires: offer.expires, stun, sdp: peer.pc.localDescription.toJSON() }) };
@@ -46,14 +47,29 @@ export class Room extends EventTarget {
     this.setName(name); this.id = data.peer; this.roomId = data.room; this.hostId = data.host; this.stun = data.stun;
     const peer = this.makePeer(data.host, data.name, false);
     try {
-      await peer.pc.setRemoteDescription(data.sdp);
+      // Gather a reply without starting outbound ICE checks. The host may need
+      // minutes to receive it; that human waiting time is not a network failure.
+      const deferred = deferCandidates(data.sdp);
+      peer.pendingCandidates = deferred.candidates; peer.waitingForHost = true;
+      await peer.pc.setRemoteDescription(deferred.description);
       this.prepareTransceivers(peer);
       await peer.pc.setLocalDescription(await peer.pc.createAnswer());
       await gather(peer.pc);
+      this.deadline(peer, data.expires, 'The invitation expired before you connected. Ask for a new invitation.');
       return await encodeReply({ v: VERSION, type: 'answer', room: data.room, session: data.session, peer: this.id, name: this.name, sdp: peer.pc.localDescription.toJSON() }, data.secret);
     } catch (error) { this.dropPeer(peer.id); Object.assign(this, original); throw error; }
   }
-  async acceptReply(code) {
+  async connectToHost() {
+    const peer = this.peers.get(this.hostId);
+    if (!peer || this.isHost) throw new Error('Create a reply before connecting.');
+    if (peer.established || !peer.waitingForHost) return;
+    if (peer.channel?.readyState === 'closed' || peer.pc.connectionState === 'closed') throw new Error('This connection is no longer available. Ask for a new invitation.');
+    peer.waitingForHost = false;
+    this.deadline(peer, Date.now() + 60000, 'Could not establish a direct connection. These networks may need a trusted LAN/VPN or a TURN relay. No relay is configured.');
+    for (const candidate of peer.pendingCandidates) await peer.pc.addIceCandidate(candidate);
+    await peer.pc.addIceCandidate(null); peer.pendingCandidates = [];
+  }
+  async acceptReply(code, automatic = false) {
     const session = String(code).trim().split('.')[1];
     const offer = this.offers.get(session);
     if (!offer || offer.expires <= Date.now()) { this.expireOffers(); throw new Error('That invitation has expired or has already been used.'); }
@@ -62,11 +78,14 @@ export class Room extends EventTarget {
     offer.peer.name = reply.name;
     await offer.peer.pc.setRemoteDescription(reply.sdp);
     this.offers.delete(session);
+    if (!offer.peer.established) this.deadline(offer.peer, Date.now() + 60000, automatic
+      ? 'Could not establish a direct connection to your friend. These networks may need a trusted LAN/VPN or a TURN relay. No relay is configured.'
+      : 'Your friend did not connect. Ask them to click Connect after sending their reply, or try a fresh invitation.');
   }
   makePeer(id, name, initiator) {
     if (this.peers.has(id)) throw new Error('This person is already connected.');
     const pc = new RTCPeerConnection(this.configuration());
-    const peer = { id, name, pc, channel: null, stream: new MediaStream(), watching: false, subscribed: false, sharing: false, info: null, timer: null, departed: false };
+    const peer = { id, name, pc, channel: null, stream: new MediaStream(), watching: false, subscribed: false, sharing: false, info: null, timer: null, departed: false, established: false, waitingForHost: false, pendingCandidates: [] };
     this.peers.set(id, peer);
     pc.ontrack = event => {
       if (!peer.stream.getTrackById(event.track.id)) peer.stream.addTrack(event.track);
@@ -74,7 +93,7 @@ export class Room extends EventTarget {
     };
     pc.onconnectionstatechange = () => {
       this.emit('state', peer);
-      if (pc.connectionState === 'failed') { this.emit('notice', `Could not connect to ${peer.name || 'your friend'}. Your routers may require a TURN relay or a trusted LAN/VPN.`); this.dropPeer(id, true); }
+      if (pc.connectionState === 'failed' && !peer.waitingForHost) this.failPeer(peer, 'Could not establish a direct connection. These networks may need a trusted LAN/VPN or a TURN relay. No relay is configured.');
     };
     pc.ondatachannel = event => this.bindChannel(peer, event.channel);
     if (initiator) {
@@ -98,16 +117,32 @@ export class Room extends EventTarget {
   bindChannel(peer, channel) {
     peer.channel = channel;
     channel.onopen = () => {
+      peer.established = true; peer.waitingForHost = false; peer.pendingCandidates = []; clearTimeout(peer.timer);
       this.send(peer, { type: 'hello', name: this.name, sharing: this.sharing, info: this.mediaInfo });
       this.emit('peer', peer);
       if (this.isHost) this.updateMesh(peer.id);
     };
-    channel.onclose = () => this.dropPeer(peer.id, true);
+    channel.onclose = () => { if (!peer.waitingForHost) this.failPeer(peer, 'The connection failed before joining. Ask for a fresh invitation and try again.'); };
     channel.onmessage = event => {
       if (typeof event.data !== 'string' || event.data.length > 160000) return;
       try { const message = JSON.parse(event.data); Promise.resolve(this.handle(peer, message)).catch(error => this.emit('notice', error.message)); }
       catch { this.emit('notice', 'A peer sent an invalid control message.'); }
     };
+  }
+  deadline(peer, expires, message) {
+    clearTimeout(peer.timer);
+    peer.timer = setTimeout(() => { if (!peer.established && !peer.departed) this.failPeer(peer, message); }, Math.max(0, expires - Date.now()));
+  }
+  failPeer(peer, message) {
+    if (peer.departed) return;
+    const established = peer.established;
+    this.dropPeer(peer.id, established);
+    // A pending host connection is not a room that has disconnected. Keep
+    // existing host-side participants and capture when one invitation fails.
+    if (!established) {
+      if (peer.id === this.hostId && !this.closed) { this.leave(); this.emit('ended', message); }
+      else this.emit('notice', message);
+    }
   }
   send(peer, data) {
     if (peer?.channel?.readyState !== 'open') return false;
@@ -208,6 +243,7 @@ export class Room extends EventTarget {
     const peer = this.peers.get(id);
     if (!peer || peer.departed) return;
     peer.departed = true; peer.channel && (peer.channel.onclose = null);
+    clearTimeout(peer.timer); peer.pendingCandidates = [];
     peer.pc.onconnectionstatechange = null; peer.pc.ontrack = null; peer.pc.ondatachannel = null;
     peer.pc.close(); peer.stream.getTracks().forEach(t => t.stop()); this.peers.delete(id);
     for (const [session, offer] of this.offers) if (offer.peer.id === id) this.offers.delete(session);

@@ -1,8 +1,8 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { resolve, extname } from 'node:path';
+import { resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-const root = fileURLToPath(new URL('../app/', import.meta.url));
+const root = process.env.HAVIJ_APP_DIRECTORY ? resolve(process.env.HAVIJ_APP_DIRECTORY) + sep : fileURLToPath(new URL('../app/', import.meta.url));
 const types = { '.html': 'text/html', '.css': 'text/css', '.mjs': 'text/javascript', '.png': 'image/png', '.ico': 'image/x-icon' };
 const server = http.createServer(async (req, res) => {
   try {
