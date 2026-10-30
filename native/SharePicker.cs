@@ -52,7 +52,8 @@ internal sealed class SourceDialog : DarkDialog
     readonly IReadOnlyList<CaptureSource>? fixtureSources;
     readonly IReadOnlyList<CaptureSource>? fixtureMonitors;
     ToolStripDropDown? settings;
-    bool entireScreen, shareAudio=true;
+    bool entireScreen, appAudio=true, screenAudio;
+    bool shareAudio { get => entireScreen ? screenAudio : appAudio; set { if(entireScreen) screenAudio=value; else appAudio=value; } }
     bool AudioSupported=>entireScreen||OperatingSystem.IsWindowsVersionAtLeast(10,0,20348);
     internal CaptureSource? Selected { get; private set; }
     internal bool Audio=>shareAudio;
@@ -89,7 +90,8 @@ internal sealed class SourceDialog : DarkDialog
     void Switch(bool screen)
     {
         entireScreen=screen; applications.Selected=!screen; monitors.Selected=screen; applications.Invalidate(); monitors.Invalidate();
-        shareAudio=!screen&&AudioSupported; scope.Visible=false;
+        if(!AudioSupported) shareAudio=false;
+        scope.Visible=false;
         Reload(); UpdateSummary();
     }
     void Reload()

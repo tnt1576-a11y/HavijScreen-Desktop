@@ -310,13 +310,87 @@ internal static class Diagnostics
                 long sourceStart=receiver.VideoFrames;
                 await host.Share(new("Synthetic source-resolution frames",IntPtr.Zero,0,false),new ShareOptions { Mode="Screenshare" }.Quality,true,true);
                 await Until(()=>receiver.VideoFrames>=sourceStart+30&&host.PreviewFrames>=15,8000,"Source-resolution 15 fps mode did not render and stream.");
+                int starts=host.EncoderStarts;
                 long before=receiver.VideoFrames; await host.Preview(IntPtr.Zero); await Until(()=>receiver.VideoFrames>=before+30,6000,"Stopping local preview interrupted outgoing media.");
+                await host.Preview(window); before=receiver.VideoFrames; await Until(()=>receiver.VideoFrames>=before+30,6000,"Restoring preview interrupted outgoing media.");
+                if(host.EncoderStarts!=starts) throw new InvalidOperationException("Preview toggling restarted the encoder.");
+                await Until(()=>host.FeedbackSamples>0,15000,"No native RTCP feedback was read.");
+                sender.DiagnosticPacketLoss(.15);
+                await Until(()=>host.BitrateKbps<3600,25000,"Packet loss did not reduce the live encoder bitrate.");
+                sender.DiagnosticPacketLoss(0);
+                await Task.Delay(6000); int reduced=host.BitrateKbps;
+                await Until(()=>host.BitrateKbps>reduced,45000,"Bitrate did not recover after packet loss ended.");
+                if(host.EncoderStarts!=starts) throw new InvalidOperationException("Adaptive bitrate restarted the encoder.");
                 guest.Watch(host.Id,IntPtr.Zero,false); await host.Preview(window); await Until(()=>host.PreviewFrames>=30&&host.Encoder=="",6000,"Preview-only capture was not restored after the last viewer left.");
                 await host.Preview(IntPtr.Zero); if(host.PreviewFrames!=0||host.Encoder!=""||!errors.IsEmpty) throw new InvalidOperationException("Preview did not release its capture resources: "+string.Join("; ",errors));
-                string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { gpuPreview=true,previewOffWithoutViewersIdle=true,previewOnlyWithoutEncoding=true,oneEncoderWithPreviewAndViewer=true,sourceResolution15Fps=true,audioPreviewMuted=true,streamSurvivedPreviewOff=true,captureReleasedAfterPreviewOff=true }));
+                string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { gpuPreview=true,previewOffWithoutViewersIdle=true,previewOnlyWithoutEncoding=true,oneEncoderWithPreviewAndViewer=true,sourceResolution15Fps=true,audioPreviewMuted=true,streamSurvivedPreviewOff=true,previewToggleWithoutEncoderRestart=true,rtcpPacketLossReducedBitrate=true,bitrateRecoveredWithoutRestart=true,captureReleasedAfterPreviewOff=true }));
             }
             catch(Exception error) { exit=1; string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { error=error.ToString(),errors })); }
             finally { host.Dispose(); guest.Dispose(); try { await Task.WhenAll(host.Completion,guest.Completion).WaitAsync(TimeSpan.FromSeconds(6)); } catch {} form.Close(); }
+        };
+        Application.Run(form); return exit;
+    }
+    internal static int Viewer(string[] args,string? runtime)
+    {
+        using var form=new MainForm(runtime); int exit=0;
+        form.Shown+=async(_,_)=>
+        {
+            try
+            {
+                const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                await Until(()=>(bool)typeof(MainForm).GetField("ready",flags)!.GetValue(form)!,10000,"Viewer startup did not become ready.");
+                if(new[]{"nvd3d11h264enc","amfh264enc","qsvh264enc"}.Any(Gst.Has)) throw new InvalidOperationException("Viewer test requires a runtime without encoder plugins.");
+                foreach(string field in new[]{"join","invite"}) if(!((Control)typeof(MainForm).GetField(field,flags)!.GetValue(form)!).Enabled) throw new InvalidOperationException("Room controls disabled without an encoder.");
+                WriteReport(args,new { viewerReadyWithoutEncoder=true,roomControlsEnabled=true });
+            }
+            catch(Exception error) { exit=1; WriteReport(args,new { error=error.ToString() }); }
+            finally { form.Close(); }
+        };
+        Application.Run(form); return exit;
+    }
+    static void WriteReport(string[] args,object result) { string? path=Program.Option(args,"report"); if(path!=null) File.WriteAllText(path,JsonSerializer.Serialize(result)); }
+    internal static int Regressions(string[] args)
+    {
+        using var form=new Form { Text="HavijScreen regression checks",ClientSize=new Size(320,160) }; int exit=0;
+        form.Shown+=async(_,_)=>
+        {
+            using var host=new NativeRoom(true) { Stun=false }; using var guest=new NativeRoom(true) { Stun=false };
+            try
+            {
+                using(var picker=new SourceDialog(fixtures:Array.Empty<CaptureSource>()))
+                {
+                    const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+                    var switchTab=typeof(SourceDialog).GetMethod("Switch",flags)!; var audio=typeof(SourceDialog).GetProperty("shareAudio",flags)!;
+                    switchTab.Invoke(picker,[false]); audio.SetValue(picker,false); switchTab.Invoke(picker,[false]);
+                    if(picker.Audio) throw new InvalidOperationException("Reselecting Applications lost the mute choice.");
+                    switchTab.Invoke(picker,[true]); if(picker.Audio) throw new InvalidOperationException("System audio was not muted by default.");
+                    audio.SetValue(picker,true); switchTab.Invoke(picker,[false]); if(picker.Audio) throw new InvalidOperationException("Switching tabs lost application mute.");
+                    switchTab.Invoke(picker,[true]); if(!picker.Audio) throw new InvalidOperationException("Switching tabs lost explicit monitor audio selection.");
+                }
+                var rate=new NetworkRate(8000); rate.Observe("slow",new(1,.2,.05),10000); int reduced=rate.Target;
+                rate.Observe("slow",new(1,0,.05),20000); if(rate.Target!=reduced) throw new InvalidOperationException("Repeated feedback triggered recovery.");
+                rate.Observe("fast",new(1,0,.01),21000); if(rate.Target!=reduced) throw new InvalidOperationException("Fast viewer overrode slow viewer.");
+                for(uint i=2;i<60;i++) rate.Observe("slow",new(i,.5,.05),20000+i*5000);
+                if(rate.Target!=1000) throw new InvalidOperationException("Bitrate floor failed.");
+                rate.Retain(["fast"]); if(rate.Target!=8000) throw new InvalidOperationException("Departed viewer still limited bitrate.");
+                using(var finite=new Pipeline(MediaCapture.VideoPipeline(new("Finite fixture",IntPtr.Zero,0,false),Quality.All[0],"",true,false,false).Replace("pattern=ball","num-buffers=15 pattern=ball")))
+                {
+                    bool ended=false; finite.Ended+=()=>ended=true; finite.Play(); await Until(()=>ended,5000,"Disabled preview swallowed end-of-stream.");
+                }
+                using(var source=new Form()) { await host.Share(new("Owned window",source.Handle,(uint)Environment.ProcessId,false),Quality.All[0],false); }
+                guest.ConfigureGuest(guest.Id,host.Id,host.RoomId,false);
+                var sender=host.AddPeer(guest.Id,"Viewer",true); var receiver=guest.AddPeer(host.Id,"Host",false);
+                var offer=await sender.CreateDescription(true); await receiver.ApplyDescription(offer); var answer=await receiver.CreateDescription(false); await sender.ApplyDescription(answer);
+                await Until(()=>host.Connected.Count==1&&guest.Connected.Count==1&&receiver.Sharing,15000,"Regression peers did not connect.");
+                guest.Watch(host.Id,IntPtr.Zero,true); await Until(()=>host.CaptureError!=null&&!receiver.Sharing,5000,"Closed source did not stop sharing.");
+                if(host.Connected.Count!=1||guest.Connected.Count!=1) throw new InvalidOperationException("Capture failure disconnected a viewer.");
+                await host.Share(new("Synthetic retry",IntPtr.Zero,0,false),Quality.All[0],false,true);
+                await Until(()=>receiver.Sharing,3000,"Retry share did not arrive."); guest.Watch(host.Id,IntPtr.Zero,true);
+                await Until(()=>receiver.VideoFrames>=30,6000,"Could not share again in the same room.");
+                WriteReport(args,new { audioChoicesPreserved=true,systemAudioDefaultMuted=true,closedSourceKeepsRoom=true,retryWithoutRejoining=true,rateBoundsAndMultipleViewers=true,staleFeedbackIgnored=true,disabledPreviewForwardsEndOfStream=true });
+            }
+            catch(Exception error) { exit=1; WriteReport(args,new { error=error.ToString() }); }
+            finally { host.Dispose(); guest.Dispose(); await Task.WhenAll(host.Completion,guest.Completion); form.Close(); }
         };
         Application.Run(form); return exit;
     }

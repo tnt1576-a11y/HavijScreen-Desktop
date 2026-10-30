@@ -148,6 +148,15 @@ internal static class Gst
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_mini_object_ref(IntPtr obj);
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern void gst_mini_object_unref(IntPtr obj);
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_sample_get_buffer(IntPtr sample);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_sample_get_caps(IntPtr sample);
+    [DllImport(App, CallingConvention = CallingConvention.Cdecl)] internal static extern void gst_app_src_set_caps(IntPtr source, IntPtr caps);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_structure_n_fields(IntPtr structure);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_structure_nth_field_name(IntPtr structure,int index);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_value_get_structure(IntPtr value);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_structure_get_string(IntPtr structure,[MarshalAs(UnmanagedType.LPUTF8Str)] string field);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_structure_get_double(IntPtr structure,[MarshalAs(UnmanagedType.LPUTF8Str)] string field,out double value);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_structure_get_uint(IntPtr structure,[MarshalAs(UnmanagedType.LPUTF8Str)] string field,out uint value);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern void gst_util_set_object_arg(IntPtr obj,[MarshalAs(UnmanagedType.LPUTF8Str)] string field,[MarshalAs(UnmanagedType.LPUTF8Str)] string value);
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_sample_get_segment(IntPtr sample);
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern ulong gst_segment_to_running_time(IntPtr segment, int format, ulong position);
     [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_bin_recalculate_latency(IntPtr bin);

@@ -61,8 +61,10 @@ internal static class Sources
 
 internal sealed class MediaCapture : IDisposable
 {
-    Pipeline? video, audio;
-    IntPtr videoSink, audioSink, previewSink;
+    Pipeline? video, audio, preview;
+    readonly object previewGate=new();
+    IntPtr videoSink, audioSink, previewSink, previewSource, rawSink, previewValve, encoderElement;
+    internal int BitrateKbps { get; private set; }
     bool disposed;
     long frames, bytes, firstFrameTime, lastFrameTime;
     internal long Frames => Interlocked.Read(ref frames);
@@ -71,6 +73,7 @@ internal sealed class MediaCapture : IDisposable
     internal string Encoder { get; private set; } = "";
     internal event Action<bool, IntPtr, ulong>? Packet;
     internal event Action<string>? Failed;
+    internal event Action<string>? PreviewFailed;
     long previewFrames;
     internal long PreviewFrames => Interlocked.Read(ref previewFrames);
     internal static string SelectEncoder() => new[] { "nvd3d11h264enc", "amfh264enc", "qsvh264enc" }.FirstOrDefault(Gst.Has)
@@ -91,10 +94,10 @@ internal sealed class MediaCapture : IDisposable
             : $"d3d11screencapturesrc capture-api=wgc show-cursor={source.CaptureCursor.ToString().ToLowerInvariant()} show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
         string size=quality.Width>0&&quality.Height>0?$",width={quality.Width},height={quality.Height}":"";
         string raw=$"{input} ! video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12{size}";
-        string playback="queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! identity name=preview-counter signal-handoffs=true silent=true ! d3d11videosink name=local-preview sync=false async=false enable-last-sample=false";
+        string playback="valve name=preview-valve drop=true drop-mode=forward-sticky-events ! appsink name=raw-preview emit-signals=true sync=false async=false max-buffers=1 drop=true wait-on-eos=false enable-last-sample=false";
         if(!encode) return raw+" ! "+playback;
         string encoding=$"{EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=true";
-        return preview?raw+" ! tee name=frames frames. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "+encoding+" frames. ! "+playback:raw+" ! "+encoding;
+        return raw+" ! tee name=frames frames. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "+encoding+" frames. ! "+playback;
     }
     internal static string AudioSource(CaptureSource source, bool systemAudio)
     {
@@ -119,12 +122,10 @@ internal sealed class MediaCapture : IDisposable
             video = new Pipeline(VideoPipeline(source,quality,Encoder,synthetic,previewWindow!=IntPtr.Zero,encode));
             video.Failed += message => Failed?.Invoke("Video capture: " + message);
             video.Ended += () => { if (!disposed) Failed?.Invoke("The selected capture source closed."); };
-            if(encode) { videoSink = Gst.Named(video.Handle,"encoded-video"); video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false))); }
-            if(previewWindow!=IntPtr.Zero)
-            {
-                previewSink=Gst.Named(video.Handle,"local-preview"); Gst.gst_video_overlay_set_window_handle(previewSink,unchecked((UIntPtr)(ulong)previewWindow.ToInt64()));
-                IntPtr counter=Gst.Named(video.Handle,"preview-counter"); video.Connect(counter,"handoff",new Gst.ObjectSignal((_,_,_)=>Interlocked.Increment(ref previewFrames))); Gst.gst_object_unref(counter);
-            }
+            if(encode) { videoSink = Gst.Named(video.Handle,"encoded-video"); video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false))); encoderElement=Gst.Named(video.Handle,"encoder"); BitrateKbps=quality.Kbps; }
+            rawSink=Gst.Named(video.Handle,"raw-preview"); previewValve=Gst.Named(video.Handle,"preview-valve");
+            video.Connect(rawSink,"new-sample",new Gst.NewSample((sink,_)=>PreviewPacket(sink)));
+            if(previewWindow!=IntPtr.Zero) try { SetPreview(previewWindow); } catch(Exception error) { PreviewFailed?.Invoke(error.Message); }
             if (shareAudio&&encode)
             {
                 string input = synthetic ? "audiotestsrc is-live=true wave=sine freq=440 volume=0.1" : AudioSource(source,source.Monitor);
@@ -136,6 +137,59 @@ internal sealed class MediaCapture : IDisposable
             video.Play(); audio?.Play();
         }
         catch { Dispose(); throw; }
+    }
+    internal void SetBitrate(int kbps)
+    {
+        if(disposed||encoderElement==IntPtr.Zero||kbps==BitrateKbps) return;
+        Gst.SetInt(encoderElement,"bitrate",kbps,IntPtr.Zero);
+        Gst.GetInt(encoderElement,"bitrate",out int applied,IntPtr.Zero);
+        if(applied!=kbps) throw new InvalidOperationException("The encoder did not accept the bitrate change.");
+        BitrateKbps=applied;
+    }
+    internal void SetPreview(IntPtr window)
+    {
+        if(disposed) return;
+        Gst.SetInt(previewValve,"drop",1,IntPtr.Zero);
+        Pipeline? old;
+        lock(previewGate)
+        {
+            old=preview; preview=null;
+            if(previewSource!=IntPtr.Zero) Gst.gst_object_unref(previewSource);
+            if(previewSink!=IntPtr.Zero) Gst.gst_object_unref(previewSink);
+            previewSource=previewSink=IntPtr.Zero;
+        }
+        old?.Dispose();
+        if(window==IntPtr.Zero) return;
+        var next=new Pipeline("appsrc name=preview-input is-live=true format=time block=false max-buffers=1 leaky-type=downstream ! identity name=preview-counter signal-handoffs=true silent=true ! d3d11videosink name=local-preview sync=false async=false enable-last-sample=false");
+        try
+        {
+            next.Failed+=error=> { if(!disposed&&ReferenceEquals(preview,next)) PreviewFailed?.Invoke(error); };
+            IntPtr counter=Gst.Named(next.Handle,"preview-counter"); next.Connect(counter,"handoff",new Gst.ObjectSignal((_,_,_)=>Interlocked.Increment(ref previewFrames))); Gst.gst_object_unref(counter);
+            lock(previewGate)
+            {
+                preview=next; previewSource=Gst.Named(next.Handle,"preview-input"); previewSink=Gst.Named(next.Handle,"local-preview");
+                Gst.gst_video_overlay_set_window_handle(previewSink,unchecked((UIntPtr)(ulong)window.ToInt64())); next.Play();
+            }
+            Gst.SetInt(previewValve,"drop",0,IntPtr.Zero);
+        }
+        catch { SetPreview(IntPtr.Zero); throw; }
+    }
+    int PreviewPacket(IntPtr sink)
+    {
+        IntPtr sample=Gst.gst_app_sink_try_pull_sample(sink,0); if(sample==IntPtr.Zero) return 0;
+        try
+        {
+            lock(previewGate)
+            {
+                if(previewSource==IntPtr.Zero||disposed) return 0;
+                Gst.gst_app_src_set_caps(previewSource,Gst.gst_sample_get_caps(sample));
+                // Transfer a reference to the existing GPU memory, without mapping pixels.
+                Gst.gst_app_src_push_buffer(previewSource,Gst.gst_mini_object_ref(Gst.gst_sample_get_buffer(sample)));
+            }
+            return 0;
+        }
+        catch(Exception error) { ThreadPool.QueueUserWorkItem(_=>PreviewFailed?.Invoke(error.Message)); return 0; }
+        finally { Gst.gst_mini_object_unref(sample); }
     }
     int ReadPacket(IntPtr sink, bool isAudio)
     {
@@ -160,11 +214,13 @@ internal sealed class MediaCapture : IDisposable
     }
     public void Dispose()
     {
-        if (disposed) return; disposed = true;
+        if (disposed) return;
+        if(previewValve!=IntPtr.Zero) SetPreview(IntPtr.Zero);
+        disposed = true;
         audio?.Dispose(); video?.Dispose(); audio = video = null;
         if (audioSink != IntPtr.Zero) Gst.gst_object_unref(audioSink);
         if (videoSink != IntPtr.Zero) Gst.gst_object_unref(videoSink);
-        if(previewSink!=IntPtr.Zero) Gst.gst_object_unref(previewSink);
-        audioSink = videoSink = previewSink = IntPtr.Zero;
+        foreach(var element in new[]{rawSink,previewValve,encoderElement}) if(element!=IntPtr.Zero) Gst.gst_object_unref(element);
+        audioSink = videoSink = rawSink = previewValve = encoderElement = IntPtr.Zero;
     }
 }

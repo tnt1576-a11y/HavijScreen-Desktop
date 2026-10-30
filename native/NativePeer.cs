@@ -18,6 +18,8 @@ internal sealed class NativePeer : IDisposable
     readonly CancellationTokenSource lifetime = new();
     IntPtr rtc, videoSource, audioSource, channel, videoSink, volume;
     bool disposed;
+    readonly uint videoSsrc;
+    int statsPending;
     IntPtr targetWindow;
     long frames, audioPackets, sentBytes;
     TaskCompletionSource<bool> gathering = NewCompletion<bool>();
@@ -50,9 +52,10 @@ internal sealed class NativePeer : IDisposable
             catch (OperationCanceledException) { }
             catch (Exception error) { if (!disposed) Failed?.Invoke(error.Message); }
         });
-        int videoSsrc = RandomNumberGenerator.GetInt32(1,int.MaxValue), audioSsrc = RandomNumberGenerator.GetInt32(1,int.MaxValue);
+        videoSsrc = (uint)RandomNumberGenerator.GetInt32(1,int.MaxValue); int audioSsrc = RandomNumberGenerator.GetInt32(1,int.MaxValue);
+        string impairment=headless?"identity name=network-fixture ! ":"";
         string description = "webrtcbin name=rtc bundle-policy=max-bundle latency=80 "
-            + $"appsrc name=sendvideo is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=3 leaky-type=downstream caps=\"video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline\" ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtph264pay pt=96 ssrc={videoSsrc} config-interval=-1 aggregate-mode=zero-latency ! application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96,packetization-mode=(string)1,ssrc=(uint){videoSsrc} ! rtc. "
+            + $"appsrc name=sendvideo is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=3 leaky-type=downstream caps=\"video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline\" ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtph264pay pt=96 ssrc={videoSsrc} config-interval=-1 aggregate-mode=zero-latency ! {impairment}application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96,packetization-mode=(string)1,ssrc=(uint){videoSsrc} ! rtc. "
             + $"appsrc name=sendaudio is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=8 leaky-type=downstream caps=\"audio/x-opus,rate=48000,channels=2,channel-mapping-family=0\" ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtpopuspay pt=111 ssrc={audioSsrc} ! application/x-rtp,media=audio,encoding-name=OPUS,clock-rate=48000,payload=111,encoding-params=(string)2,ssrc=(uint){audioSsrc} ! rtc.";
         pipeline = new Pipeline(description);
         pipeline.Failed += message => Failed?.Invoke(message);
@@ -213,6 +216,50 @@ internal sealed class NativePeer : IDisposable
             Interlocked.Add(ref sentBytes,(long)Gst.gst_buffer_get_size(copy).ToUInt64());
             Gst.gst_app_src_push_buffer(isAudio ? audioSource : videoSource,copy);
         }
+    }
+    internal void DiagnosticPacketLoss(double fraction)
+    {
+        if(!headless||fraction<0||fraction>.5) throw new InvalidOperationException("Packet loss injection is restricted to diagnostic peers.");
+        lock(gate) { ObjectDisposedException.ThrowIf(disposed,this); IntPtr fixture=Gst.Named(pipeline.Handle,"network-fixture"); try { Gst.gst_util_set_object_arg(fixture,"drop-probability",fraction.ToString(System.Globalization.CultureInfo.InvariantCulture)); } finally { Gst.gst_object_unref(fixture); } }
+    }
+    internal async Task<NetworkFeedback?> Feedback(CancellationToken cancellation)
+    {
+        if(Interlocked.Exchange(ref statsPending,1)!=0) return null;
+        var result=NewCompletion<NetworkFeedback?>();
+        try
+        {
+            Gst.PromiseChanged callback=(promise,_)=>
+            {
+                try { result.TrySetResult(ReadFeedback(Gst.gst_promise_get_reply(promise),videoSsrc)); }
+                catch { result.TrySetResult(null); }
+                finally { Gst.gst_promise_unref(promise); Interlocked.Exchange(ref statsPending,0); }
+            };
+            lock(gate)
+            {
+                if(disposed||!ChannelOpen||!WatchingUs) { Interlocked.Exchange(ref statsPending,0); return null; }
+                Gst.CreateDescription(rtc,"get-stats",IntPtr.Zero,Gst.Promise(callback));
+            }
+            return await result.Task.WaitAsync(TimeSpan.FromSeconds(2),cancellation);
+        }
+        catch(OperationCanceledException) { return null; }
+        catch(TimeoutException) { return null; } // Keep one native request in flight until its callback completes.
+    }
+    static NetworkFeedback? ReadFeedback(IntPtr reply,uint videoSsrc)
+    {
+        if(reply==IntPtr.Zero) return null;
+        for(int i=0;i<Gst.gst_structure_n_fields(reply);i++)
+        {
+            string name=Gst.Text(Gst.gst_structure_nth_field_name(reply,i));
+            if(!name.StartsWith("rtp-remote-inbound-stream-stats_",StringComparison.Ordinal)) continue;
+            IntPtr entry=Gst.gst_value_get_structure(Gst.gst_structure_get_value(reply,name));
+            if(entry==IntPtr.Zero||Gst.gst_structure_get_uint(entry,"ssrc",out uint ssrc)==0||ssrc!=videoSsrc) continue;
+            if(Gst.gst_structure_get_double(entry,"fraction-lost",out double loss)==0) continue;
+            Gst.gst_structure_get_double(entry,"round-trip-time",out double rtt);
+            IntPtr rawValue=Gst.gst_structure_get_value(entry,"gst-rtpsource-stats"); if(rawValue==IntPtr.Zero) continue;
+            IntPtr raw=Gst.gst_value_get_structure(rawValue);
+            if(raw!=IntPtr.Zero&&Gst.gst_structure_get_uint(raw,"rb-exthighestseq",out uint sequence)!=0) return new(sequence,loss,rtt);
+        }
+        return null;
     }
     internal void SetView(IntPtr window, bool audioEnabled)
     {

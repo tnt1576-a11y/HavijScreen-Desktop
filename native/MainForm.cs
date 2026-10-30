@@ -73,7 +73,7 @@ internal sealed class MainForm : NativeForm
         {
             hotkey = RegisterHotKey(Handle,HotkeyId,0x0002|0x0004|0x4000,(uint)Keys.S);
             if (!hotkey) shortcut.Text = "Stop in app · Ctrl + Shift + S";
-            try { await Task.Run(() => { Gst.Initialize(runtime); _ = MediaCapture.SelectEncoder(); }); ready = true; state.Text = ""; }
+            try { await Task.Run(() => Gst.Initialize(runtime)); ready = true; state.Text = ""; }
             catch(Exception error) { state.Text = error.Message; }
             Render(); timer.Start();
         };
@@ -177,7 +177,8 @@ internal sealed class MainForm : NativeForm
             decline.Click += async (_,_) => await lobby.Reject(request.Route); card.Controls.AddRange([accept,decline]); people.Controls.Add(card);
         }
         people.ResumeLayout(); LayoutSidebar();
-        if (lobby.State == "offline") state.Text = lobby.Status;
+        if (room.CaptureError is { } captureError) { state.Text=captureError; state.ForeColor=Color.FromArgb(234,171,141); }
+        else if (lobby.State == "offline") state.Text = lobby.Status;
         else if (lobby.Joining) state.Text = lobby.Status;
         else if(ready) { state.Text=""; state.ForeColor=Ui.Muted; }
         banner.Visible = room.Sharing; banner.SetStatus($"Sharing · {room.Viewers} watching     {(sourceLabel.Tag is true ? (currentSource?.Monitor == true ? "System audio" : "App audio") : "Video only")}");
@@ -236,6 +237,7 @@ internal sealed class MainForm : NativeForm
     {
         if (!ready || resetting) return;
         if (room.Sharing) { await StopSharing(); return; }
+        try { _=MediaCapture.SelectEncoder(); } catch(Exception error) { ShowNotice(error.Message); return; }
         using var picker = new SourceDialog(quality.SelectedItem,streamMode,captureCursor); if (picker.ShowDialog(this) != DialogResult.OK || picker.Selected == null) return;
         try
         {

@@ -18,6 +18,9 @@ internal sealed class NativeRoom : IDisposable
     readonly ConcurrentBag<Task> shutdown = [];
     internal Task Completion { get; private set; } = Task.CompletedTask;
     int captureGeneration;
+    NetworkRate rates=new(Quality.All[0].Kbps);
+    internal int BitrateKbps=>capture?.BitrateKbps??0;
+    internal int FeedbackSamples { get; private set; }
     string name = "Player";
     internal string Id { get; private set; } = SetupCrypto.Id();
     internal string RoomId { get; private set; } = SetupCrypto.Id();
@@ -30,13 +33,14 @@ internal sealed class NativeRoom : IDisposable
     internal IReadOnlyList<NativePeer> Connected => peers.Values.Where(p => p.ChannelOpen).ToArray();
     internal int Viewers => peers.Values.Count(p => p.ChannelOpen && p.WatchingUs);
     internal string Encoder => capture?.Encoder ?? "";
+    internal string? CaptureError { get; private set; }
     internal long EncodedFrames => capture?.Frames ?? 0;
     internal int EncoderStarts { get; private set; }
     internal event Action? Changed;
     internal event Action<string>? Notice;
     internal event Action<string>? Ended;
     internal event Action<string>? Unwatch;
-    internal NativeRoom(bool diagnostic = false) { this.diagnostic = diagnostic; HostId = Id; }
+    internal NativeRoom(bool diagnostic = false) { this.diagnostic = diagnostic; HostId = Id; _=Task.Run(RateLoop); }
     internal void ConfigureGuest(string id, string host, string room, bool stun)
     {
         if (peers.Count != 0 || !SetupCrypto.ValidId(id) || !SetupCrypto.ValidId(host) || !SetupCrypto.ValidId(room) || id == host) throw new InvalidOperationException("Invalid room connection.");
@@ -156,7 +160,7 @@ internal sealed class NativeRoom : IDisposable
     internal async Task Share(CaptureSource captureSource, Quality captureQuality, bool shareAudio, bool diagnostic = false)
     {
         if (!diagnostic) Sources.Validate(captureSource);
-        source = captureSource; quality = captureQuality; audio = shareAudio; synthetic = diagnostic; Sharing = true; Interlocked.Increment(ref captureGeneration);
+        CaptureError=null; source = captureSource; quality = captureQuality; audio = shareAudio; synthetic = diagnostic; Sharing = true; Interlocked.Increment(ref captureGeneration);
         Broadcast(new { type = "sharing", active = true, info = Info() }); await ReconcileMedia(); Changed?.Invoke();
     }
     internal async Task StopSharing()
@@ -178,7 +182,7 @@ internal sealed class NativeRoom : IDisposable
             IntPtr preview=previewWindow;
             bool needed = !disposed && Sharing && source != null && (encode||preview!=IntPtr.Zero);
             int generation = captureGeneration;
-            if (capture != null && (!needed || generation != runningGeneration || runningPreview!=preview || runningEncode!=encode))
+            if (capture != null && (!needed || generation != runningGeneration || runningEncode!=encode))
             {
                 var previous = capture; capture = null; await Task.Run(previous.Dispose);
             }
@@ -186,11 +190,59 @@ internal sealed class NativeRoom : IDisposable
             {
                 var next = new MediaCapture();
                 next.Packet += (isAudio,buffer,time) => { foreach (var peer in Volatile.Read(ref outgoing)) peer.Push(isAudio,buffer,time); };
-                next.Failed += error => { _ = StopSharing(); Notice?.Invoke(error+" Choose the source again, or explicitly share video without audio."); };
-                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; if(encode) EncoderStarts++; }
-                catch { next.Dispose(); Sharing = false; Broadcast(new { type = "sharing", active = false }); throw; }
+                next.Failed += error => { _ = CaptureFailed(next,error); };
+                next.PreviewFailed += error => { _ = PreviewFailed(next,error); };
+                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; rates=new(quality.Kbps); if(encode) EncoderStarts++; }
+                catch(Exception error) { next.Dispose(); ClearFailedShare(error.Message); }
+            }
+            else if(capture!=null&&runningPreview!=preview)
+            {
+                try { await Task.Run(()=>capture.SetPreview(preview)); runningPreview=preview; }
+                catch(Exception error) { previewWindow=runningPreview=IntPtr.Zero; Notice?.Invoke("Local preview: "+error.Message); }
             }
         }
+        finally { mediaGate.Release(); }
+    }
+    async Task RateLoop()
+    {
+        using var timer=new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while(await timer.WaitForNextTickAsync(lifetime.Token))
+            {
+                var active=Volatile.Read(ref outgoing); if(active.Length==0||!Sharing) continue;
+                int generation=captureGeneration;
+                var feedback=await Task.WhenAll(active.Select(async p=>(Peer:p,Value:await p.Feedback(lifetime.Token))));
+                await mediaGate.WaitAsync(lifetime.Token);
+                try
+                {
+                    if(disposed||!Sharing||capture==null||!runningEncode||generation!=captureGeneration) continue;
+                    var current=Volatile.Read(ref outgoing); rates.Retain(current.Select(p=>p.Id));
+                    foreach(var item in feedback) if(item.Value!=null&&current.Contains(item.Peer)) { rates.Observe(item.Peer.Id,item.Value,Environment.TickCount64); FeedbackSamples++; }
+                    capture.SetBitrate(rates.Target);
+                }
+                finally { mediaGate.Release(); }
+            }
+        }
+        catch(OperationCanceledException) { }
+        catch(Exception error) { if(!disposed) Notice?.Invoke("Automatic bitrate adjustment stopped: "+error.Message); }
+    }
+    void ClearFailedShare(string error)
+    {
+        Sharing=false; CaptureError=error+" Choose the source again, or share video without audio.";
+        foreach(var peer in peers.Values) peer.WatchingUs=false;
+        RefreshOutgoing(); Broadcast(new { type="sharing",active=false }); Changed?.Invoke(); Notice?.Invoke(CaptureError);
+    }
+    async Task CaptureFailed(MediaCapture expected,string error)
+    {
+        await mediaGate.WaitAsync();
+        try { if(disposed||capture!=expected) return; capture=null; await Task.Run(expected.Dispose); ClearFailedShare(error); }
+        finally { mediaGate.Release(); }
+    }
+    async Task PreviewFailed(MediaCapture expected,string error)
+    {
+        await mediaGate.WaitAsync();
+        try { if(disposed||capture!=expected) return; await Task.Run(()=>expected.SetPreview(IntPtr.Zero)); previewWindow=runningPreview=IntPtr.Zero; Notice?.Invoke("Local preview: "+error); }
         finally { mediaGate.Release(); }
     }
     internal void Watch(string id, IntPtr window, bool enabled, bool sound = false)
