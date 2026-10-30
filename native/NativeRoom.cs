@@ -165,14 +165,20 @@ internal sealed class NativeRoom : IDisposable
         Broadcast(new { type = "sharing", active = false, info = (object?)null }); await ReconcileMedia(); Changed?.Invoke();
     }
     int runningGeneration = -1;
+    IntPtr previewWindow, runningPreview;
+    bool runningEncode;
+    internal long PreviewFrames => capture?.PreviewFrames??0;
+    internal async Task Preview(IntPtr window) { if(previewWindow==window) return; previewWindow=window; await ReconcileMedia(); Changed?.Invoke(); }
     async Task ReconcileMedia()
     {
         await mediaGate.WaitAsync();
         try
         {
-            bool needed = !disposed && Sharing && source != null && Viewers > 0;
+            bool encode=Viewers>0;
+            IntPtr preview=previewWindow;
+            bool needed = !disposed && Sharing && source != null && (encode||preview!=IntPtr.Zero);
             int generation = captureGeneration;
-            if (capture != null && (!needed || generation != runningGeneration))
+            if (capture != null && (!needed || generation != runningGeneration || runningPreview!=preview || runningEncode!=encode))
             {
                 var previous = capture; capture = null; await Task.Run(previous.Dispose);
             }
@@ -181,7 +187,7 @@ internal sealed class NativeRoom : IDisposable
                 var next = new MediaCapture();
                 next.Packet += (isAudio,buffer,time) => { foreach (var peer in Volatile.Read(ref outgoing)) peer.Push(isAudio,buffer,time); };
                 next.Failed += error => { _ = StopSharing(); Notice?.Invoke(error+" Choose the source again, or explicitly share video without audio."); };
-                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic)); capture = next; runningGeneration = generation; EncoderStarts++; }
+                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; if(encode) EncoderStarts++; }
                 catch { next.Dispose(); Sharing = false; Broadcast(new { type = "sharing", active = false }); throw; }
             }
         }

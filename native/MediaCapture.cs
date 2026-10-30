@@ -11,6 +11,8 @@ internal sealed record Quality(string Name, int Width, int Height, int Fps, int 
 }
 internal sealed record CaptureSource(string Name, IntPtr Handle, uint ProcessId, bool Monitor)
 {
+    internal Rectangle Bounds { get; init; }
+    internal bool CaptureCursor { get; init; } = true;
     public override string ToString() => Name;
 }
 internal static class Sources
@@ -25,12 +27,14 @@ internal static class Sources
     [DllImport("user32", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr window, StringBuilder text, int count);
     [DllImport("user32")] static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32")] static extern long GetWindowLongPtr(IntPtr window, int index);
+    [StructLayout(LayoutKind.Sequential)] struct MonitorInfo { public int Size; public int Left,Top,Right,Bottom,WorkLeft,WorkTop,WorkRight,WorkBottom; public uint Flags; }
+    [DllImport("user32",CharSet=CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr monitor,ref MonitorInfo info);
     internal static IReadOnlyList<CaptureSource> List(bool monitors)
     {
         var result = new List<CaptureSource>();
         if (monitors)
         {
-            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (handle, _, _, _) => { result.Add(new("Display " + (result.Count + 1), handle, 0, true)); return true; }, IntPtr.Zero);
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (handle, _, _, _) => { var info=new MonitorInfo { Size=Marshal.SizeOf<MonitorInfo>() }; GetMonitorInfo(handle,ref info); result.Add(new("Screen " + (result.Count + 1), handle, 0, true) { Bounds=Rectangle.FromLTRB(info.Left,info.Top,info.Right,info.Bottom) }); return true; }, IntPtr.Zero);
         }
         else
         {
@@ -58,7 +62,7 @@ internal static class Sources
 internal sealed class MediaCapture : IDisposable
 {
     Pipeline? video, audio;
-    IntPtr videoSink, audioSink;
+    IntPtr videoSink, audioSink, previewSink;
     bool disposed;
     long frames, bytes, firstFrameTime, lastFrameTime;
     internal long Frames => Interlocked.Read(ref frames);
@@ -67,6 +71,8 @@ internal sealed class MediaCapture : IDisposable
     internal string Encoder { get; private set; } = "";
     internal event Action<bool, IntPtr, ulong>? Packet;
     internal event Action<string>? Failed;
+    long previewFrames;
+    internal long PreviewFrames => Interlocked.Read(ref previewFrames);
     internal static string SelectEncoder() => new[] { "nvd3d11h264enc", "amfh264enc", "qsvh264enc" }.FirstOrDefault(Gst.Has)
         ?? throw new InvalidOperationException("No supported GPU H.264 encoder was found. Update your graphics driver. HavijScreen will not silently switch to CPU encoding.");
     internal static string EncoderSettings(string encoder, Quality quality)
@@ -79,11 +85,16 @@ internal sealed class MediaCapture : IDisposable
             _ => throw new InvalidOperationException("Unsupported hardware encoder.")
         };
     }
-    internal static string VideoPipeline(CaptureSource source, Quality quality, string encoder, bool synthetic = false)
+    internal static string VideoPipeline(CaptureSource source, Quality quality, string encoder, bool synthetic = false, bool preview=false, bool encode=true)
     {
         string input = synthetic ? "videotestsrc is-live=true pattern=ball ! video/x-raw,format=BGRA,width=1920,height=1080 ! d3d11upload"
-            : "d3d11screencapturesrc capture-api=wgc show-cursor=true show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
-        return $"{input} ! video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12,width={quality.Width},height={quality.Height} ! {EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=true";
+            : $"d3d11screencapturesrc capture-api=wgc show-cursor={source.CaptureCursor.ToString().ToLowerInvariant()} show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
+        string size=quality.Width>0&&quality.Height>0?$",width={quality.Width},height={quality.Height}":"";
+        string raw=$"{input} ! video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12{size}";
+        string playback="queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! identity name=preview-counter signal-handoffs=true silent=true ! d3d11videosink name=local-preview sync=false async=false enable-last-sample=false";
+        if(!encode) return raw+" ! "+playback;
+        string encoding=$"{EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=true";
+        return preview?raw+" ! tee name=frames frames. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "+encoding+" frames. ! "+playback:raw+" ! "+encoding;
     }
     internal static string AudioSource(CaptureSource source, bool systemAudio)
     {
@@ -97,19 +108,24 @@ internal sealed class MediaCapture : IDisposable
         if (!systemAudio) throw new InvalidOperationException("System audio was not selected.");
         return "wasapi2src loopback=true low-latency=true continue-on-error=false";
     }
-    internal void Start(CaptureSource source, Quality quality, bool shareAudio, bool synthetic = false)
+    internal void Start(CaptureSource source, Quality quality, bool shareAudio, bool synthetic = false, IntPtr previewWindow=default, bool encode=true)
     {
         if (video != null || disposed) throw new InvalidOperationException("The capture session is already in use.");
         if (!synthetic) Sources.Validate(source);
-        Encoder = SelectEncoder();
+        if(!encode&&previewWindow==IntPtr.Zero) throw new InvalidOperationException("A local preview window is required.");
+        Encoder = encode?SelectEncoder():"";
         try
         {
-            video = new Pipeline(VideoPipeline(source,quality,Encoder,synthetic));
+            video = new Pipeline(VideoPipeline(source,quality,Encoder,synthetic,previewWindow!=IntPtr.Zero,encode));
             video.Failed += message => Failed?.Invoke("Video capture: " + message);
             video.Ended += () => { if (!disposed) Failed?.Invoke("The selected capture source closed."); };
-            videoSink = Gst.Named(video.Handle,"encoded-video");
-            video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false)));
-            if (shareAudio)
+            if(encode) { videoSink = Gst.Named(video.Handle,"encoded-video"); video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false))); }
+            if(previewWindow!=IntPtr.Zero)
+            {
+                previewSink=Gst.Named(video.Handle,"local-preview"); Gst.gst_video_overlay_set_window_handle(previewSink,unchecked((UIntPtr)(ulong)previewWindow.ToInt64()));
+                IntPtr counter=Gst.Named(video.Handle,"preview-counter"); video.Connect(counter,"handoff",new Gst.ObjectSignal((_,_,_)=>Interlocked.Increment(ref previewFrames))); Gst.gst_object_unref(counter);
+            }
+            if (shareAudio&&encode)
             {
                 string input = synthetic ? "audiotestsrc is-live=true wave=sine freq=440 volume=0.1" : AudioSource(source,source.Monitor);
                 audio = new Pipeline(input + " ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! opusenc bitrate=96000 audio-type=restricted-lowdelay frame-size=10 ! appsink name=encoded-audio emit-signals=true sync=false max-buffers=4 drop=true");
@@ -148,6 +164,7 @@ internal sealed class MediaCapture : IDisposable
         audio?.Dispose(); video?.Dispose(); audio = video = null;
         if (audioSink != IntPtr.Zero) Gst.gst_object_unref(audioSink);
         if (videoSink != IntPtr.Zero) Gst.gst_object_unref(videoSink);
-        audioSink = videoSink = IntPtr.Zero;
+        if(previewSink!=IntPtr.Zero) Gst.gst_object_unref(previewSink);
+        audioSink = videoSink = previewSink = IntPtr.Zero;
     }
 }

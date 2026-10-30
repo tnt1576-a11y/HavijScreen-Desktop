@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace HavijScreen.Native;
 
-internal enum Glyph { None, Screen, Window, Arrow, Link, Plus, Shield, Audio, Stop, Chevron, Close, Minimize, Maximize, Refresh, Bolt }
+internal enum Glyph { None, Screen, Window, Arrow, Link, Plus, Shield, Audio, Stop, Chevron, Close, Minimize, Maximize, Refresh, Bolt, Eye, Gear, ChevronRight }
 internal enum ButtonKind { Secondary, Primary, Invite, Text, Title, Close, Danger }
 
 internal static class Art
@@ -28,6 +28,7 @@ internal static class Art
             case Glyph.Window: using (var r=Round(new(3,3,18,18),2)) g.DrawPath(p,r); Lines(new(3,8),new(21,8)); g.DrawEllipse(p,6,5,0.5f,0.5f); g.DrawEllipse(p,10,5,0.5f,0.5f); break;
             case Glyph.Arrow: Lines(new(5,12),new(19,12)); Lines(new(14,7),new(19,12),new(14,17)); break;
             case Glyph.Chevron: Lines(new(7,9),new(12,14),new(17,9)); break;
+            case Glyph.ChevronRight: Lines(new(9,7),new(14,12),new(9,17)); break;
             case Glyph.Plus: Lines(new(5,12),new(19,12)); Lines(new(12,5),new(12,19)); break;
             case Glyph.Close: Lines(new(6,6),new(18,18)); Lines(new(18,6),new(6,18)); break;
             case Glyph.Minimize: Lines(new(5,12),new(19,12)); break;
@@ -36,7 +37,9 @@ internal static class Art
             case Glyph.Shield: Lines(new(12,3),new(20,6),new(20,12),new(18,17),new(12,21),new(6,17),new(4,12),new(4,6),new(12,3)); Lines(new(8,12),new(11,15),new(16,9)); break;
             case Glyph.Audio: Lines(new(11,4),new(5,9),new(2,9),new(2,15),new(5,15),new(11,20),new(11,4)); g.DrawArc(p,10,7,9,10,-65,130); g.DrawArc(p,10,3,14,18,-60,120); break;
             case Glyph.Link: g.DrawArc(p,2,9,12,12,45,270); g.DrawArc(p,10,1,12,12,225,270); Lines(new(8,16),new(16,8)); break;
-            case Glyph.Refresh: g.DrawArc(p,4,4,16,16,-65,290); Lines(new(15,3),new(20,5),new(21,0)); break;
+            case Glyph.Refresh: using(var circle=new GraphicsPath()) { circle.AddBezier(21,9,20,5,16,3,12,3); circle.AddBezier(12,3,7,3,3,7,3,12); circle.AddBezier(3,12,3,17,7,21,12,21); circle.AddBezier(12,21,16,21,19,19,20,16); g.DrawPath(p,circle); } Lines(new(21,3),new(21,9),new(15,9)); break;
+            case Glyph.Eye: using(var eye=new GraphicsPath()) { eye.AddBezier(2,12,7,3,17,3,22,12); eye.AddBezier(22,12,17,21,7,21,2,12); g.DrawPath(p,eye); } g.DrawEllipse(p,9,9,6,6); break;
+            case Glyph.Gear: using(var gear=new GraphicsPath(FillMode.Alternate)) { var points=new PointF[32]; for(int i=0;i<points.Length;i++) { double a=i*Math.PI/16,r=i%4<2?10:8; points[i]=new((float)(12+r*Math.Cos(a)),(float)(12+r*Math.Sin(a))); } gear.AddPolygon(points); gear.AddEllipse(8,8,8,8); using var fill=new SolidBrush(color); g.FillPath(fill,gear); } break;
             case Glyph.Bolt: Lines(new(13,2),new(4,14),new(11,14),new(10,22),new(20,10),new(13,10),new(13,2)); break;
         }
         g.Restore(state);
@@ -161,6 +164,25 @@ internal sealed class ThemedCheckBox : CheckBox
         if(Checked) { using var p=new Pen(Color.FromArgb(40,35,29),Ui.Px(this,2)); g.DrawLines(p,[new(Ui.Px(this,4),y+Ui.Px(this,8)),new(Ui.Px(this,7),y+Ui.Px(this,11)),new(Ui.Px(this,13),y+Ui.Px(this,5))]); }
         TextRenderer.DrawText(g,Text,Font,new Rectangle(Ui.Px(this,28),0,Width-Ui.Px(this,28),Height),Enabled?ForeColor:Ui.Disabled,TextFormatFlags.VerticalCenter|TextFormatFlags.NoPadding|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
         if(Focused&&ShowFocusCues) ControlPaint.DrawFocusRectangle(g,ClientRectangle,Ui.Accent,BackColor);
+    }
+}
+
+internal sealed class LocalPreviewToggle : CheckBox
+{
+    internal LocalPreviewToggle()
+    {
+        Text=AccessibleName="Local preview"; AccessibleDescription="Keep off to save rendering work"; AutoSize=false; Cursor=Cursors.Hand;
+        SetStyle(ControlStyles.UserPaint|ControlStyles.AllPaintingInWmPaint|ControlStyles.OptimizedDoubleBuffer|ControlStyles.ResizeRedraw,true);
+    }
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g=e.Graphics; g.Clear(Parent?.BackColor??Ui.Background); g.SmoothingMode=SmoothingMode.AntiAlias; int P(int n)=>Ui.Px(this,n);
+        Art.Icon(g,Glyph.Eye,new(0,P(23),P(17),P(17)),Ui.Muted); using var title=Ui.Font(11); using var help=Ui.Font(8);
+        TextRenderer.DrawText(g,"Local preview",title,new Rectangle(P(28),P(13),Width-P(66),P(22)),Ui.Foreground,TextFormatFlags.VerticalCenter|TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g,"Keep off to save rendering work",help,new Rectangle(P(28),P(35),Width-P(62),P(18)),Ui.Muted,TextFormatFlags.NoPadding);
+        var r=new Rectangle(Width-P(29),P(24),P(29),P(17)); using var path=Art.Round(r,P(9)); using var fill=new SolidBrush(Checked?Color.FromArgb(112,130,93):Color.FromArgb(49,60,43)); g.FillPath(fill,path);
+        using var dot=new SolidBrush(Checked?Ui.Foreground:Color.FromArgb(130,145,119)); int d=P(11); g.FillEllipse(dot,Checked?r.Right-d-P(3):r.X+P(3),r.Y+P(3),d,d);
+        if(Focused&&ShowFocusCues) ControlPaint.DrawFocusRectangle(g,ClientRectangle);
     }
 }
 

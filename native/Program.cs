@@ -14,6 +14,8 @@ internal static class Program
         try
         {
             if (args.Contains("--fixture")) return Diagnostics.Fixture(args);
+            if (args.Contains("--picker-preview")) return Diagnostics.PickerPreview(args);
+            if (args.Contains("--preview-test")) { Gst.Initialize(runtime); return Diagnostics.Preview(args); }
             if (args.Contains("--playback-test")) { Gst.Initialize(runtime); return Diagnostics.Playback(args); }
             if (args.Contains("--probe") || args.Contains("--benchmark") || args.Contains("--self-test") || args.Contains("--tone") || args.Contains("--rtc-test") || args.Contains("--room-test") || args.Contains("--capture-test"))
             {

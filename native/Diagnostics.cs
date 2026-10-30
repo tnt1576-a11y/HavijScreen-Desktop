@@ -286,4 +286,53 @@ internal static class Diagnostics
         };
         Application.Run(form); return exit;
     }
+    internal static int Preview(string[] args)
+    {
+        using var form=new Form { Text="HavijScreen GPU preview test",ClientSize=new Size(960,540),BackColor=Color.Black,StartPosition=FormStartPosition.CenterScreen };
+        int exit=0;
+        form.Shown+=async(_,_)=>
+        {
+            IntPtr window=form.Handle; using var host=new NativeRoom(true) { Stun=false,Name="Synthetic preview host" }; using var guest=new NativeRoom(true) { Stun=false,Name="Synthetic viewer" };
+            var errors=new System.Collections.Concurrent.ConcurrentQueue<string>(); host.Notice+=errors.Enqueue; guest.Notice+=errors.Enqueue;
+            try
+            {
+                await host.Share(new("Synthetic GPU frames",IntPtr.Zero,0,false),Quality.All[2],true,true);
+                if(host.EncoderStarts!=0||host.PreviewFrames!=0) throw new InvalidOperationException("Capture started while preview was off and nobody watched.");
+                await host.Preview(window); await Until(()=>host.PreviewFrames>=30,6000,"Preview-only video did not render.");
+                if(host.EncoderStarts!=0||host.Encoder!="") throw new InvalidOperationException("Preview-only mode started an encoder.");
+                guest.ConfigureGuest(guest.Id,host.Id,host.RoomId,false);
+                var sender=host.AddPeer(guest.Id,guest.Name,true); var receiver=guest.AddPeer(host.Id,host.Name,false);
+                var offer=await sender.CreateDescription(true); await receiver.ApplyDescription(offer); var answer=await receiver.CreateDescription(false); await sender.ApplyDescription(answer);
+                await Until(()=>host.Connected.Count==1&&guest.Connected.Count==1,15000,"Preview test peers did not connect.");
+                await Until(()=>receiver.Sharing,3000,"Share state was not delivered."); guest.Watch(host.Id,IntPtr.Zero,true);
+                await Until(()=>receiver.VideoFrames>=60&&receiver.AudioPackets>=30&&host.PreviewFrames>=30,10000,"Shared GPU preview and native media did not run together.");
+                if(host.EncoderStarts!=1) throw new InvalidOperationException("Preview plus sharing used more than one encoder.");
+                long sourceStart=receiver.VideoFrames;
+                await host.Share(new("Synthetic source-resolution frames",IntPtr.Zero,0,false),new ShareOptions { Mode="Screenshare" }.Quality,true,true);
+                await Until(()=>receiver.VideoFrames>=sourceStart+30&&host.PreviewFrames>=15,8000,"Source-resolution 15 fps mode did not render and stream.");
+                long before=receiver.VideoFrames; await host.Preview(IntPtr.Zero); await Until(()=>receiver.VideoFrames>=before+30,6000,"Stopping local preview interrupted outgoing media.");
+                guest.Watch(host.Id,IntPtr.Zero,false); await host.Preview(window); await Until(()=>host.PreviewFrames>=30&&host.Encoder=="",6000,"Preview-only capture was not restored after the last viewer left.");
+                await host.Preview(IntPtr.Zero); if(host.PreviewFrames!=0||host.Encoder!=""||!errors.IsEmpty) throw new InvalidOperationException("Preview did not release its capture resources: "+string.Join("; ",errors));
+                string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { gpuPreview=true,previewOffWithoutViewersIdle=true,previewOnlyWithoutEncoding=true,oneEncoderWithPreviewAndViewer=true,sourceResolution15Fps=true,audioPreviewMuted=true,streamSurvivedPreviewOff=true,captureReleasedAfterPreviewOff=true }));
+            }
+            catch(Exception error) { exit=1; string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { error=error.ToString(),errors })); }
+            finally { host.Dispose(); guest.Dispose(); try { await Task.WhenAll(host.Completion,guest.Completion).WaitAsync(TimeSpan.FromSeconds(6)); } catch {} form.Close(); }
+        };
+        Application.Run(form); return exit;
+    }
+    internal static int PickerPreview(string[] args)
+    {
+        using var first=new Form { Text="Crystal Caverns · synthetic fixture",ClientSize=new Size(960,540),BackColor=Color.FromArgb(25,47,69),ShowInTaskbar=true,StartPosition=FormStartPosition.Manual,Location=new Point(60,80) };
+        using var second=new Form { Text="Weekend playlist · synthetic fixture",ClientSize=new Size(900,560),BackColor=Color.FromArgb(53,32,65),ShowInTaskbar=false,StartPosition=FormStartPosition.Manual,Location=new Point(420,130) };
+        first.Paint+=(_,e)=>{ var g=e.Graphics; using var moon=new SolidBrush(Color.FromArgb(239,186,125)); g.FillEllipse(moon,710,70,100,100); using var hills=new SolidBrush(Color.FromArgb(37,91,107)); g.FillPolygon(hills,[new(0,540),new(0,350),new(220,160),new(500,400),new(700,260),new(960,480),new(960,540)]); using var f=Ui.Font(30,FontStyle.Bold); g.DrawString("CRYSTAL CAVERNS",f,Brushes.White,35,35); using var small=Ui.Font(14); g.DrawString("Owned synthetic window · no game is running",small,Brushes.LightGray,38,85); };
+        second.Paint+=(_,e)=>{ var g=e.Graphics; using var f=Ui.Font(26,FontStyle.Bold); g.DrawString("Weekend playlist",f,Brushes.White,35,30); for(int i=0;i<5;i++) { using var fill=new SolidBrush(Color.FromArgb(65+i*8,46+i*5,84+i*5)); g.FillRectangle(fill,35,110+i*78,820,60); using var small=Ui.Font(16); g.DrawString("Synthetic track "+(i+1),small,Brushes.LightGray,60,126+i*78); } };
+        first.Shown+=(_,_)=>
+        {
+            second.Show(); var fixtures=new[] { new CaptureSource(first.Text,first.Handle,(uint)Environment.ProcessId,false),new CaptureSource(second.Text,second.Handle,(uint)Environment.ProcessId,false) };
+            var monitors=new[] { new CaptureSource("Screen 1 · synthetic fixture",IntPtr.Zero,0,true) { Bounds=first.RectangleToScreen(first.ClientRectangle) },new CaptureSource("Screen 2 · synthetic fixture",IntPtr.Zero,0,true) { Bounds=second.RectangleToScreen(second.ClientRectangle) } };
+            using var picker=new SourceDialog(Quality.All[2],fixtures:fixtures,monitorFixtures:monitors) { StartPosition=FormStartPosition.CenterScreen,ShowInTaskbar=true };
+            picker.ShowDialog(first); string? report=Program.Option(args,"report"); if(report!=null) File.WriteAllText(report,JsonSerializer.Serialize(new { selected=picker.Selected?.Name,quality=picker.SelectedQuality,audio=picker.Audio })); first.Close();
+        };
+        Application.Run(first); return 0;
+    }
 }

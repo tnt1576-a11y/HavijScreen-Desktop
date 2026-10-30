@@ -22,6 +22,7 @@ internal class NativeForm : Form
     readonly Image carrot=Ui.Carrot();
     readonly StyledButton minimize=new("",ButtonKind.Title) { Symbol=Glyph.Minimize }, maximize=new("",ButtonKind.Title) { Symbol=Glyph.Maximize }, close=new("",ButtonKind.Close) { Symbol=Glyph.Close };
     readonly bool dialog;
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)] protected bool HideHeader { get; set; }
     [DllImport("dwmapi")] static extern int DwmSetWindowAttribute(IntPtr handle,int attribute,ref int value,int size);
     [DllImport("user32")] static extern bool ReleaseCapture();
     [DllImport("user32")] static extern IntPtr SendMessage(IntPtr hwnd,int message,IntPtr wParam,IntPtr lParam);
@@ -56,7 +57,7 @@ internal class NativeForm : Form
     protected override void OnLayout(LayoutEventArgs e)
     {
         base.OnLayout(e); if(Header==null||Content==null) return;
-        int height=Ui.Px(this,dialog?56:72), width=Ui.Px(this,48), edge=!dialog&&WindowState==FormWindowState.Normal?Ui.Px(this,6):0;
+        int height=HideHeader?0:Ui.Px(this,dialog?56:72), width=Ui.Px(this,48), edge=!dialog&&WindowState==FormWindowState.Normal?Ui.Px(this,6):0;
         // Keep the frame's hit area clear of child HWNDs so Windows can resize
         // the borderless window using its standard non-client behavior.
         Header.SetBounds(edge,edge,ClientSize.Width-2*edge,height); Content.SetBounds(edge,height+edge,ClientSize.Width-2*edge,Math.Max(0,ClientSize.Height-height-2*edge));
@@ -87,60 +88,6 @@ internal class NativeForm : Form
 internal class DarkDialog : NativeForm
 {
     internal DarkDialog():base(true) { MinimumSize=new Size(520,380); StartPosition=FormStartPosition.CenterParent; ShowInTaskbar=false; }
-}
-internal sealed class SourceDialog : DarkDialog
-{
-    readonly StyledButton windows=Ui.Button("Application",true), monitors=Ui.Button("Entire screen"), share=Ui.Button("Start sharing",true), cancel=Ui.Button("Cancel"), refresh=Ui.Button("Refresh");
-    readonly SourceList list=new();
-    readonly ThemedCheckBox sound=new() { Text="Share app audio", Checked=true };
-    readonly Label help=Ui.Label("",8,Ui.Muted);
-    bool entireScreen;
-    internal CaptureSource? Selected { get; private set; }
-    internal bool Audio=>sound.Checked;
-    internal SourceDialog()
-    {
-        Text="Choose what to share"; ClientSize=new Size(700,602); MinimumSize=new Size(560,480);
-        windows.Symbol=Glyph.Window; monitors.Symbol=Glyph.Screen; share.Symbol=Glyph.Screen; refresh.Symbol=Glyph.Refresh; refresh.Kind=ButtonKind.Text; refresh.ForeColor=Ui.Muted;
-        cancel.DialogResult=DialogResult.Cancel; CancelButton=cancel; AcceptButton=share;
-        Content.Controls.AddRange([windows,monitors,list,sound,help,refresh,cancel,share]);
-        windows.Click+=(_,_)=>{ entireScreen=false; Reload(); }; monitors.Click+=(_,_)=>{ entireScreen=true; Reload(); }; refresh.Click+=(_,_)=>Reload();
-        list.SelectedIndexChanged+=(_,_)=>share.Enabled=list.SelectedItem!=null;
-        list.DoubleClick+=(_,_)=>share.PerformClick();
-        share.Click+=(_,_)=>{ if(list.SelectedItem is CaptureSource source) { Selected=source; DialogResult=DialogResult.OK; Close(); } };
-        Content.Resize+=(_,_)=>Arrange(); Shown+=(_,_)=>{ Arrange(); Reload(); };
-    }
-    void Arrange()
-    {
-        int P(int n)=>Ui.Px(this,n); int w=Content.ClientSize.Width,h=Content.ClientSize.Height;
-        windows.SetBounds(P(24),P(20),P(156),P(38)); monitors.SetBounds(P(188),P(20),P(156),P(38));
-        list.SetBounds(P(20),P(78),w-P(40),Math.Max(P(90),h-P(254)));
-        sound.SetBounds(P(24),h-P(159),w-P(48),P(30)); help.SetBounds(P(24),h-P(125),w-P(48),P(38));
-        refresh.SetBounds(P(18),h-P(68),P(110),P(42)); cancel.SetBounds(w-P(308),h-P(68),P(112),P(42)); share.SetBounds(w-P(184),h-P(68),P(160),P(42));
-    }
-    void Reload()
-    {
-        windows.Kind=entireScreen?ButtonKind.Secondary:ButtonKind.Primary; monitors.Kind=entireScreen?ButtonKind.Primary:ButtonKind.Secondary; windows.Invalidate(); monitors.Invalidate();
-        list.Items.Clear(); foreach(var source in Sources.List(entireScreen)) list.Items.Add(source);
-        sound.Text=entireScreen?"Share all system audio":"Share app audio"; sound.Enabled=entireScreen||OperatingSystem.IsWindowsVersionAtLeast(10,0,20348); sound.Checked=!entireScreen&&sound.Enabled;
-        help.Text=entireScreen?"Includes sounds from every app on this PC.":sound.Enabled?"Audio from the selected app and its child processes. Other windows of the same app may share audio.":"App audio requires Windows 11. You can share video without audio.";
-        share.Enabled=list.Items.Count>0; if(list.Items.Count>0) list.SelectedIndex=0;
-    }
-}
-internal sealed class SourceList : ListBox
-{
-    [DllImport("uxtheme",CharSet=CharSet.Unicode)] static extern int SetWindowTheme(IntPtr hwnd,string app,string? id);
-    internal SourceList() { DrawMode=DrawMode.OwnerDrawFixed; BorderStyle=BorderStyle.None; BackColor=Ui.Background; ForeColor=Ui.Foreground; Font=Ui.Font(12); IntegralHeight=false; AccessibleName="Capture sources"; }
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); ItemHeight=Ui.Px(this,52); SetWindowTheme(Handle,"DarkMode_Explorer",null); }
-    protected override void OnDrawItem(DrawItemEventArgs e)
-    {
-        if(e.Index<0||Items[e.Index] is not CaptureSource source) return;
-        var g=e.Graphics; g.SmoothingMode=SmoothingMode.AntiAlias; float s=DeviceDpi/96f; bool selected=(e.State&DrawItemState.Selected)!=0;
-        using(var b=new SolidBrush(Ui.Background)) g.FillRectangle(b,e.Bounds);
-        var r=new RectangleF(e.Bounds.X+4*s,e.Bounds.Y+3*s,e.Bounds.Width-8*s,e.Bounds.Height-6*s); using var path=Art.Round(r,5*s); using var fill=new SolidBrush(selected?Color.FromArgb(39,49,32):Ui.Field); using var border=new Pen(selected?Color.FromArgb(108,132,82):Ui.Line); g.FillPath(fill,path); g.DrawPath(border,path);
-        Art.Icon(g,source.Monitor?Glyph.Screen:Glyph.Window,new(r.X+14*s,r.Y+13*s,20*s,20*s),selected?Ui.Accent:Ui.Muted);
-        TextRenderer.DrawText(g,source.Name,Font,new Rectangle((int)(r.X+48*s),(int)r.Y,(int)(r.Width-78*s),(int)r.Height),Ui.Foreground,TextFormatFlags.NoPadding|TextFormatFlags.VerticalCenter|TextFormatFlags.SingleLine|TextFormatFlags.EndEllipsis);
-        if(selected) { using var p=new Pen(Ui.Accent,1.6f*s); g.DrawLines(p,new PointF[]{new(r.Right-24*s,r.Y+23*s),new(r.Right-20*s,r.Y+27*s),new(r.Right-13*s,r.Y+18*s)}); }
-    }
 }
 internal sealed class RoomDialog : DarkDialog
 {

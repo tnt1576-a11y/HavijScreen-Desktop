@@ -19,6 +19,10 @@ internal sealed class MainForm : NativeForm
     readonly Label qualityHint = Ui.Label("",7,Color.FromArgb(169,184,153)), shortcut = Ui.Label("Stop · Ctrl + Shift + S",7,Ui.Muted);
     readonly ScreenIllustration illustration = new();
     readonly SharingBanner banner = new();
+    readonly LocalPreviewToggle preview=new();
+    readonly Panel localCard=new() { BackColor=Color.Black,Margin=new Padding(4),Visible=false,AccessibleName="Local preview" }, localVideo=new() { Dock=DockStyle.Fill,BackColor=Color.Black };
+    string streamMode="Custom";
+    bool captureCursor=true, updatingQuality;
     bool layoutReady;
     readonly FlowLayoutPanel people = new() { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = Padding.Empty };
     readonly StyledButton invite = Ui.Button("Invite someone"), join = Ui.Button("Join a room"), finish = Ui.Button("Finish joining"), leave = Ui.Button("Leave room"), share = Ui.Button("Start sharing",true), hero = Ui.Button("Share your screen",true);
@@ -46,8 +50,11 @@ internal sealed class MainForm : NativeForm
         leave.Click += async (_,_) => await Reset(); share.Click += async (_,_) => await ToggleShare(); hero.Click += async (_,_) => await ToggleShare();
         quality.SelectedIndexChanged += async (_,_) =>
         {
+            if(updatingQuality) return;
+            streamMode="Custom";
             SaveSettings(); if (room.Sharing && currentSource != null) try { await room.Share(currentSource,(Quality)quality.SelectedItem!,sourceLabel.Tag is true); } catch(Exception error) { ShowNotice(error.Message); }
         };
+        preview.CheckedChanged+=async(_,_)=>{ Render(); await UpdateLocalPreview(); };
         displayName.Leave += (_,_) => SaveSettings(); timer.Tick += (_,_) => UpdateStats();
         Resize += (_,_) =>
         {
@@ -60,6 +67,7 @@ internal sealed class MainForm : NativeForm
                 foreach(string id in pausedViews.ToArray()) { var peer = room.Connected.FirstOrDefault(p => p.Id == id && p.Sharing); if (peer != null) Watch(peer); }
                 pausedViews.Clear();
             }
+            _=UpdateLocalPreview();
         };
         Shown += async (_,_) =>
         {
@@ -98,7 +106,8 @@ internal sealed class MainForm : NativeForm
         actions.Controls.AddRange([invite,join,finish,leave]); left.Controls.AddRange([roomHeading,count,nameHeading,displayName,peopleHeading,people,actions]);
         empty.Controls.AddRange([illustration,hero]); stage.Controls.AddRange([empty,videos,banner]); banner.BringToFront(); banner.Visible=false; banner.Stop+=async()=>await StopSharing();
         stage.Resize+=(_,_)=>LayoutStage(); footer.Controls.AddRange([state,stats]); center.Controls.AddRange([stage,footer]);
-        right.Controls.AddRange([streamHeading,qualityHeading,quality,qualityHint,sourceHeading,sourceLabel,share,shortcut]); Content.Controls.AddRange([left,center,right]);
+        var localCaption=Ui.Label("Your screen · muted",8,Ui.Muted); localCaption.Dock=DockStyle.Bottom; localCaption.Height=32; localCaption.Padding=new Padding(10,0,0,0); localCard.Controls.AddRange([localVideo,localCaption]); videos.Controls.Add(localCard);
+        right.Controls.AddRange([streamHeading,qualityHeading,quality,qualityHint,preview,sourceHeading,sourceLabel,share,shortcut]); Content.Controls.AddRange([left,center,right]);
         layoutReady=true; LayoutUi();
     }
     protected override void OnLayout(LayoutEventArgs e) { base.OnLayout(e); if(layoutReady) LayoutUi(); }
@@ -111,7 +120,8 @@ internal sealed class MainForm : NativeForm
         LayoutSidebar(); stage.SetBounds(P(28),P(28),Math.Max(1,w-P(56)),Math.Max(P(250),height-P(146))); footer.SetBounds(P(28),height-P(106),Math.Max(1,w-P(56)),P(84));
         stats.SetBounds(0,P(25),footer.Width,P(59)); state.SetBounds(P(204),0,Math.Max(1,footer.Width-P(204)),P(24)); state.AutoEllipsis=true;
         streamHeading.SetBounds(P(24),P(26),r-P(72),P(24)); qualityHeading.SetBounds(P(24),P(78),r-P(48),P(22)); quality.SetBounds(P(24),P(109),r-P(48),P(40)); qualityHint.SetBounds(P(42),P(156),r-P(62),P(30));
-        sourceHeading.SetBounds(P(24),P(223),r-P(48),P(22)); sourceLabel.SetBounds(P(24),P(255),r-P(48),P(88));
+        preview.SetBounds(P(24),P(211),r-P(48),P(64));
+        sourceHeading.SetBounds(P(24),P(305),r-P(48),P(22)); sourceLabel.SetBounds(P(24),P(337),r-P(48),P(88));
         share.SetBounds(P(24),height-P(101),r-P(48),P(44)); shortcut.SetBounds(P(18),height-P(48),r-P(36),P(22));
         LayoutStage();
     }
@@ -211,29 +221,50 @@ internal sealed class MainForm : NativeForm
     }
     void ArrangeVideos()
     {
-        var visible = cards.Values.Where(c => c.Active).ToArray(); videos.Visible = visible.Length > 0; empty.Visible = visible.Length == 0;
+        bool showPreview=preview.Checked&&room.Sharing&&WindowState!=FormWindowState.Minimized;
+        var visible = cards.Values.Where(c => c.Active).Cast<Control>().Concat(showPreview?new[]{localCard}:Array.Empty<Control>()).ToArray(); videos.Visible = visible.Length > 0; empty.Visible = visible.Length == 0; localCard.Visible=showPreview;
         foreach(var card in cards.Values) card.Visible = card.Active;
         if (visible.Length == 0) return;
         videos.SuspendLayout(); videos.ColumnStyles.Clear(); videos.RowStyles.Clear(); videos.ColumnCount = visible.Length == 1 ? 1 : 2; videos.RowCount = visible.Length > 2 ? 2 : 1;
         for(int i = 0; i < videos.ColumnCount; i++) videos.ColumnStyles.Add(new(SizeType.Percent,100f/videos.ColumnCount));
         for(int i = 0; i < videos.RowCount; i++) videos.RowStyles.Add(new(SizeType.Percent,100f/videos.RowCount));
         for(int i = 0; i < visible.Length; i++) { videos.SetCellPosition(visible[i],new TableLayoutPanelCellPosition(i%videos.ColumnCount,i/videos.ColumnCount)); visible[i].Dock = DockStyle.Fill; }
-        videos.ResumeLayout(); if (videos.Visible) videos.BringToFront();
+        videos.Padding=new Padding(Ui.Px(this,5),Ui.Px(this,5),Ui.Px(this,5),Ui.Px(this,room.Sharing?72:5));
+        videos.ResumeLayout(); if (videos.Visible) videos.BringToFront(); banner.BringToFront();
     }
     async Task ToggleShare()
     {
         if (!ready || resetting) return;
         if (room.Sharing) { await StopSharing(); return; }
-        using var picker = new SourceDialog(); if (picker.ShowDialog(this) != DialogResult.OK || picker.Selected == null) return;
+        using var picker = new SourceDialog(quality.SelectedItem,streamMode,captureCursor); if (picker.ShowDialog(this) != DialogResult.OK || picker.Selected == null) return;
         try
         {
             currentSource = picker.Selected; sourceLabel.Tag = picker.Audio;
+            SelectQuality(picker.SelectedQuality); streamMode=picker.SelectedMode; captureCursor=currentSource.CaptureCursor; SaveSettings();
             sourceLabel.Text = currentSource.Name+"\n\n"+(picker.Audio ? (currentSource.Monitor ? "All system audio" : "Selected app audio") : "Video only");
-            await room.Share(currentSource,(Quality)quality.SelectedItem!,picker.Audio); Render();
+            await room.Share(currentSource,(Quality)quality.SelectedItem!,picker.Audio); Render(); await UpdateLocalPreview();
         }
         catch(Exception error) { ShowNotice(error.Message); }
     }
     async Task StopSharing() { try { await room.StopSharing(); Render(); } catch(Exception error) { ShowNotice(error.Message); } }
+    async Task UpdateLocalPreview()
+    {
+        if(!ready||closing||resetting) return;
+        try { await room.Preview(preview.Checked&&room.Sharing&&WindowState!=FormWindowState.Minimized?localVideo.Handle:IntPtr.Zero); }
+        catch(Exception error) { if(!closing) ShowNotice("Local preview: "+error.Message); }
+    }
+    void SelectQuality(Quality selected)
+    {
+        updatingQuality=true;
+        try
+        {
+            quality.SelectedIndex=-1; if(quality.Items.Count>Quality.All.Length) quality.Items.RemoveRange(Quality.All.Length,quality.Items.Count-Quality.All.Length);
+            int index=Array.FindIndex(Quality.All,q=>q.Width==selected.Width&&q.Height==selected.Height&&q.Fps==selected.Fps&&q.Kbps==selected.Kbps);
+            if(index<0) { quality.Items.Add(selected); index=quality.Items.Count-1; }
+            quality.SelectedIndex=index;
+        }
+        finally { updatingQuality=false; }
+    }
     void OpenRoomDialog(bool joining)
     {
         if (!ready) return;
@@ -259,7 +290,7 @@ internal sealed class MainForm : NativeForm
         if (tick-lastTick >= 500) { lastBytes = total; lastTick = tick; }
         string encoder = room.Encoder switch { "nvd3d11h264enc" => "NVIDIA NVENC", "amfh264enc" => "AMD AMF", "qsvh264enc" => "Intel Quick Sync", _ => room.Sharing ? "Waiting for a viewer" : "—" };
         var selected = (Quality)quality.SelectedItem!;
-        stats.UpdateValues(room.Sharing ? $"{selected.Height}p / {selected.Fps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
+        stats.UpdateValues(room.Sharing ? $"{(selected.Height==0?"Source":selected.Height+"p")} / {selected.Fps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
     }
     void ShowNotice(string message) { state.Text = message; state.ForeColor = Color.FromArgb(234,171,141); }
     void ReadSettings()
@@ -269,13 +300,17 @@ internal sealed class MainForm : NativeForm
             if (!File.Exists(SettingsPath) || new FileInfo(SettingsPath).Length > 4096) return;
             using var json = JsonDocument.Parse(File.ReadAllText(SettingsPath)); var value = json.RootElement;
             if (SetupCrypto.ValidName(value.Text("name",32))) displayName.Text = value.Text("name",32);
-            quality.SelectedIndex = Math.Clamp(value.Int("quality"),0,Quality.All.Length-1); stun = value.Bool("stun"); room.Stun = stun;
+            if(value.Int("quality")>=Quality.All.Length&&ShareOptions.Resolutions.Contains(value.Int("height"))&&ShareOptions.FrameRates.Contains(value.Int("fps"))) SelectQuality(new ShareOptions { Height=value.Int("height"),Fps=value.Int("fps") }.Quality);
+            else quality.SelectedIndex = Math.Clamp(value.Int("quality"),0,Quality.All.Length-1);
+            streamMode=value.Text("mode",16) is "Gaming"?"Gaming":value.Text("mode",16) is "Screenshare"?"Screenshare":"Custom";
+            captureCursor=!value.TryGetProperty("cursor",out var cursor)||cursor.ValueKind!=JsonValueKind.False;
+            stun = value.Bool("stun"); room.Stun = stun;
         }
         catch { }
     }
     void SaveSettings()
     {
-        try { Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!); File.WriteAllText(SettingsPath,JsonSerializer.Serialize(new { name = displayName.Text, quality = quality.SelectedIndex, stun })); } catch { }
+        try { Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!); File.WriteAllText(SettingsPath,JsonSerializer.Serialize(new { name = displayName.Text, quality = quality.SelectedIndex, height=quality.SelectedItem?.Height??720, fps=quality.SelectedItem?.Fps??30, mode=streamMode, cursor=captureCursor, stun })); } catch { }
     }
     protected override void WndProc(ref Message message)
     {
