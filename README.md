@@ -4,7 +4,7 @@
 
 A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.0/HavijScreen-0.5.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.0)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.1/HavijScreen-0.5.1-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.1)
 
 ## Run on Windows
 
@@ -35,7 +35,7 @@ In the source picker's gear menu, **Mute stream audio** controls audio for the s
 
 **Entire Screen** starts muted. Unchecking **Mute stream audio** explicitly enables audio from all apps on the PC, as indicated in the menu. If application audio fails, HavijScreen stops the share and reports the failure. It never substitutes whole-PC audio. You can choose the source again with stream audio muted to share video only.
 
-No microphone or camera access is requested. Windows may show its capture border around the selected source. Protected, minimized or exclusive-fullscreen windows may not capture correctly; borderless window mode can help.
+No microphone or camera access is requested. Application capture uses Windows Graphics Capture and may show Windows' yellow capture border. Entire Screen uses DXGI Desktop Duplication, which does not use that border. Enabling local preview starts capture even without a viewer. Protected, minimized or exclusive-fullscreen windows may not capture correctly; borderless window mode can help.
 
 ## Quality and game performance
 
@@ -57,11 +57,11 @@ Capture, conversion and encoding use native Windows and GPU APIs. One hardware e
 
 Because viewers share one encode, the weakest reported connection sets the video bitrate for everyone. Without usable connection feedback, the app keeps its current target rather than assuming the network has recovered.
 
-**Local preview** is off each time the app opens. Enable it to see your own shared source, with its sound muted. Preview alone uses GPU capture and rendering without starting an encoder or audio capture. With viewers, preview shares the existing GPU capture path and one hardware encoder. Leave preview off to save rendering work. Capture stops when neither a viewer nor local preview needs it.
+**Local preview** is off each time the app opens. Enable it to see your own shared source, with its sound muted. Preview alone captures at 720p and at most 30 fps without starting an encoder or audio capture. With viewers, preview shares the existing GPU capture path and one hardware encoder; preview rendering stays capped at 30 fps independently of the outgoing stream. Leave preview off to save rendering work. Capture stops when neither a viewer nor local preview needs it.
 
 Minimizing HavijScreen pauses local preview and incoming streams, then resumes them when restored; outgoing sharing continues. Toggling local preview does not restart an active outgoing encoder or audio capture. The status area shows upload, encoder and viewer count.
 
-The UI uses native Windows controls. The media engine uses Windows Graphics Capture, D3D11, WASAPI process loopback, hardware H.264 and Opus through GStreamer. Raw captured video stays in the GPU capture/convert/encode path; the app distributes the encoded packets. Download size is larger than the older web version because the native runtimes are included.
+The UI uses native Windows controls. The media engine uses DXGI Desktop Duplication for monitors, Windows Graphics Capture for applications, D3D11, WASAPI process loopback, hardware H.264 and Opus through GStreamer. Raw captured video stays in the GPU capture/convert/encode path; the app distributes the encoded packets. Download size is larger than the older web version because the native runtimes are included.
 
 Capture, encoding and playback still consume resources. GPU contention, drivers and game settings affect FPS. HavijScreen has not been benchmarked across games or certified by anti-cheat vendors, and cannot promise zero FPS loss or universal compatibility. It does not inject DLLs into games, hook game graphics APIs, read game memory, install drivers or add an in-game overlay.
 
@@ -92,6 +92,6 @@ On Windows x64, with PowerShell and internet access:
 .\scripts\build-native.ps1
 ```
 
-The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.0/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.1/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
 `npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

@@ -360,6 +360,7 @@ internal static partial class Diagnostics
             try
             {
                 CheckSourceEligibility();
+                CheckQualityMenu(form);
                 using(var picker=new SourceDialog(fixtures:Array.Empty<CaptureSource>()))
                 {
                     const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
@@ -390,7 +391,7 @@ internal static partial class Diagnostics
                 await host.Share(new("Synthetic retry",IntPtr.Zero,0,false),Quality.All[0],false,true);
                 await Until(()=>receiver.Sharing,3000,"Retry share did not arrive."); guest.Watch(host.Id,IntPtr.Zero,true);
                 await Until(()=>receiver.VideoFrames>=30,6000,"Could not share again in the same room.");
-                WriteReport(args,new { systemPickerEntriesExcluded=true,cloakedPickerWindowsExcluded=true,audioChoicesPreserved=true,systemAudioDefaultMuted=true,closedSourceKeepsRoom=true,retryWithoutRejoining=true,rateBoundsAndMultipleViewers=true,staleFeedbackIgnored=true,disabledPreviewForwardsEndOfStream=true });
+                WriteReport(args,new { qualityMenuLifetime=true,systemPickerEntriesExcluded=true,cloakedPickerWindowsExcluded=true,audioChoicesPreserved=true,systemAudioDefaultMuted=true,closedSourceKeepsRoom=true,retryWithoutRejoining=true,rateBoundsAndMultipleViewers=true,staleFeedbackIgnored=true,disabledPreviewForwardsEndOfStream=true });
             }
             catch(Exception error) { exit=1; WriteReport(args,new { error=error.ToString() }); }
             finally { host.Dispose(); guest.Dispose(); await Task.WhenAll(host.Completion,guest.Completion); form.Close(); }

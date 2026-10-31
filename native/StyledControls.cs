@@ -217,6 +217,7 @@ internal sealed class TextField : Panel
 internal sealed class QualityPicker : StyledButtonBase
 {
     internal readonly List<Quality> Items=[];
+    ContextMenuStrip? qualityMenu;
     int selected=-1;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] internal int SelectedIndex { get=>selected; set { if(selected==value) return; selected=value; Text=SelectedItem?.Name??""; SelectedIndexChanged?.Invoke(this,EventArgs.Empty); Invalidate(); } }
     internal Quality? SelectedItem=>selected>=0&&selected<Items.Count?Items[selected]:null;
@@ -224,10 +225,16 @@ internal sealed class QualityPicker : StyledButtonBase
     internal QualityPicker() { AccessibleRole=AccessibleRole.ButtonDropDown; Font=Ui.Font(11); TabStop=true; Cursor=Cursors.Hand; }
     protected override void OnClick(EventArgs e)
     {
-        base.OnClick(e); var menu=new ContextMenuStrip { ShowImageMargin=false, BackColor=Ui.Field, ForeColor=Ui.Foreground, Font=Font, Padding=new Padding(5), Renderer=new MenuRenderer(), AutoSize=false, Width=Width, Height=Items.Count*Ui.Px(this,38)+10 };
+        base.OnClick(e);
+        if(qualityMenu is { Visible:true }) return;
+        // A dropdown is still used by WinForms after Closed fires. Keep it alive
+        // until the next opening (or owner disposal), not inside Closed.
+        qualityMenu?.Dispose();
+        var menu=qualityMenu=new ContextMenuStrip { ShowImageMargin=false, BackColor=Ui.Field, ForeColor=Ui.Foreground, Font=Font, Padding=new Padding(5), Renderer=new MenuRenderer(), AutoSize=false, Width=Width, Height=Items.Count*Ui.Px(this,38)+10 };
         for(int i=0;i<Items.Count;i++) { int index=i; var item=new ToolStripMenuItem(Items[i].Name) { AutoSize=false, Width=Width-12, Height=Ui.Px(this,38), ForeColor=Ui.Foreground, BackColor=Ui.Field }; item.Click+=(_,_)=>SelectedIndex=index; menu.Items.Add(item); }
-        menu.Closed+=(_,_)=>menu.Dispose(); menu.Show(this,new Point(0,Height+4));
+        menu.Show(this,new Point(0,Height+4));
     }
+    protected override void Dispose(bool disposing) { if(disposing) { qualityMenu?.Dispose(); qualityMenu=null; } base.Dispose(disposing); }
     protected override void OnKeyDown(KeyEventArgs e) { if(e.KeyCode is Keys.Down or Keys.Up) { SelectedIndex=Math.Clamp(selected+(e.KeyCode==Keys.Down?1:-1),0,Items.Count-1); e.Handled=true; } else if(e.KeyCode==Keys.Space) { OnClick(EventArgs.Empty); e.Handled=true; } base.OnKeyDown(e); }
     protected override void OnPaint(PaintEventArgs e)
     {

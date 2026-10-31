@@ -4,6 +4,30 @@ namespace HavijScreen.Native;
 
 internal static partial class Diagnostics
 {
+    static void CheckQualityMenu(Form owner)
+    {
+        using var picker=new QualityPicker { Width=270,Height=40 };
+        picker.Items.AddRange(Quality.All); picker.SelectedIndex=0; owner.Controls.Add(picker);
+        const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+        ContextMenuStrip? previous=null;
+        for(int i=0;i<8;i++)
+        {
+            picker.PerformClick();
+            var menu=(ContextMenuStrip)typeof(QualityPicker).GetField("qualityMenu",flags)!.GetValue(picker)!;
+            if(previous!=null&&!previous.IsDisposed) throw new InvalidOperationException("The previous quality menu leaked.");
+            if(i%2==0)
+            {
+                int index=(i/2+1)%Quality.All.Length; menu.Items[index].Select();
+                typeof(ToolStripDropDown).GetMethod("ProcessDialogKey",flags)!.Invoke(menu,[Keys.Enter]);
+                if(picker.SelectedIndex!=index) throw new InvalidOperationException("Quality menu selection failed.");
+            }
+            else menu.Close(ToolStripDropDownCloseReason.Keyboard);
+            if(menu.IsDisposed) throw new InvalidOperationException("Quality menu was disposed inside its closing stack.");
+            previous=menu;
+        }
+        picker.Dispose();
+        if(previous is not { IsDisposed:true }) throw new InvalidOperationException("Owner disposal did not release its quality menu.");
+    }
     [DllImport("dwmapi")] static extern int DwmSetWindowAttribute(IntPtr window,uint attribute,ref int value,int size);
     static void CheckSourceEligibility()
     {

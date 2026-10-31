@@ -80,6 +80,7 @@ internal sealed class MediaCapture : IDisposable
     internal event Action<string>? Failed;
     internal event Action<string>? PreviewFailed;
     long previewFrames;
+    long nextPreviewFrame;
     internal long PreviewFrames => Interlocked.Read(ref previewFrames);
     internal static string SelectEncoder() => new[] { "nvd3d11h264enc", "amfh264enc", "qsvh264enc" }.FirstOrDefault(Gst.Has)
         ?? throw new InvalidOperationException("No supported GPU H.264 encoder was found. Update your graphics driver. HavijScreen will not silently switch to CPU encoding.");
@@ -95,8 +96,10 @@ internal sealed class MediaCapture : IDisposable
     }
     internal static string VideoPipeline(CaptureSource source, Quality quality, string encoder, bool synthetic = false, bool preview=false, bool encode=true)
     {
+        // Desktop Duplication avoids WGC's monitor-wide capture indicator and
+        // compositor path. Window capture still uses WGC with its OS indicator.
         string input = synthetic ? "videotestsrc is-live=true pattern=ball ! video/x-raw,format=BGRA,width=1920,height=1080 ! d3d11upload"
-            : $"d3d11screencapturesrc capture-api=wgc show-cursor={source.CaptureCursor.ToString().ToLowerInvariant()} show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
+            : $"d3d11screencapturesrc capture-api={(source.Monitor?"dxgi":"wgc")} show-cursor={source.CaptureCursor.ToString().ToLowerInvariant()} show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
         string size=quality.Width>0&&quality.Height>0?$",width={quality.Width},height={quality.Height}":"";
         // Allow in-flight frames using the old cadence while the source handles
         // a reconfigure event; rejecting them immediately can stop WGC.
@@ -124,6 +127,8 @@ internal sealed class MediaCapture : IDisposable
         if (video != null || disposed) throw new InvalidOperationException("The capture session is already in use.");
         if (!synthetic) Sources.Validate(source);
         if(!encode&&previewWindow==IntPtr.Zero) throw new InvalidOperationException("A local preview window is required.");
+        // Preview alone never needs the high-resolution/60 fps stream workload.
+        if(!encode) quality=new("Local preview",1280,720,Math.Min(30,quality.Fps),quality.Kbps);
         Encoder = encode?SelectEncoder():"";
         diagnostic=synthetic;
         try
@@ -182,7 +187,7 @@ internal sealed class MediaCapture : IDisposable
             old=preview; preview=null;
             if(previewSource!=IntPtr.Zero) Gst.gst_object_unref(previewSource);
             if(previewSink!=IntPtr.Zero) Gst.gst_object_unref(previewSink);
-            previewSource=previewSink=IntPtr.Zero;
+            previewSource=previewSink=IntPtr.Zero; nextPreviewFrame=0;
         }
         old?.Dispose();
         if(window==IntPtr.Zero) return;
@@ -208,6 +213,9 @@ internal sealed class MediaCapture : IDisposable
             lock(previewGate)
             {
                 if(previewSource==IntPtr.Zero||disposed) return 0;
+                long now=Stopwatch.GetTimestamp(), interval=Stopwatch.Frequency/30;
+                if(now<nextPreviewFrame) return 0;
+                nextPreviewFrame=Math.Max(now,nextPreviewFrame+interval);
                 Gst.gst_app_src_set_caps(previewSource,Gst.gst_sample_get_caps(sample));
                 // Transfer a reference to the existing GPU memory, without mapping pixels.
                 Gst.gst_app_src_push_buffer(previewSource,Gst.gst_mini_object_ref(Gst.gst_sample_get_buffer(sample)));
