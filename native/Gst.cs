@@ -42,6 +42,15 @@ internal static class Gst
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate void PromiseChanged(IntPtr promise, IntPtr data);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int NewSample(IntPtr sink, IntPtr data);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int BusMessage(IntPtr bus, IntPtr message, IntPtr data);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int PadProbe(IntPtr pad, IntPtr info, IntPtr data);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern uint gst_pad_add_probe(IntPtr pad, int mask, PadProbe callback, IntPtr data, IntPtr notify);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern void gst_pad_remove_probe(IntPtr pad, uint id);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_pad_probe_info_get_event(IntPtr info);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_pad_send_event(IntPtr pad, IntPtr evt);
+    [DllImport(Core, CallingConvention = CallingConvention.Cdecl)] internal static extern uint gst_buffer_get_flags(IntPtr buffer);
+    [DllImport(App, CallingConvention = CallingConvention.Cdecl)] internal static extern ulong gst_app_src_get_current_level_buffers(IntPtr source);
+    [DllImport("gstvideo-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)] internal static extern int gst_video_event_is_force_key_unit(IntPtr evt);
+    [DllImport("gstvideo-1.0-0.dll", CallingConvention = CallingConvention.Cdecl)] internal static extern IntPtr gst_video_event_new_upstream_force_key_unit(ulong time, int headers, uint count);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void DestroyNotify(IntPtr data);
     static readonly DestroyNotify ReleasePromise = data => { if (data != IntPtr.Zero) GCHandle.FromIntPtr(data).Free(); };
     internal static IntPtr Promise(PromiseChanged callback)

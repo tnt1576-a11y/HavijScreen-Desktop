@@ -107,7 +107,7 @@ internal sealed class MediaCapture : IDisposable
         if(synthetic) raw+=" ! identity name=capture-fixture silent=true";
         string playback="valve name=preview-valve drop=true drop-mode=forward-sticky-events ! appsink name=raw-preview emit-signals=true sync=false async=false max-buffers=1 drop=true wait-on-eos=false enable-last-sample=false";
         if(!encode) return raw+" ! "+playback;
-        string encoding=$"{EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=true";
+        string encoding=$"{EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=false";
         return raw+" ! tee name=frames frames. ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "+encoding+" frames. ! "+playback;
     }
     internal static string AudioSource(CaptureSource source, bool systemAudio)
@@ -176,6 +176,13 @@ internal sealed class MediaCapture : IDisposable
         Gst.GetInt(encoderElement,"bitrate",out int applied,IntPtr.Zero);
         if(applied!=kbps) throw new InvalidOperationException("The encoder did not accept the bitrate change.");
         BitrateKbps=applied;
+    }
+    internal bool RequestKeyframe()
+    {
+        if(disposed || encoderElement==IntPtr.Zero) return false;
+        IntPtr pad=Gst.gst_element_get_static_pad(encoderElement,"src");
+        try { return Gst.gst_pad_send_event(pad,Gst.gst_video_event_new_upstream_force_key_unit(Gst.None,1,0))!=0; }
+        finally { Gst.gst_object_unref(pad); }
     }
     internal void SetPreview(IntPtr window)
     {

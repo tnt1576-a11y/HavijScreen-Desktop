@@ -328,28 +328,3 @@ internal sealed class MainForm : NativeForm
         base.WndProc(ref message);
     }
 }
-internal sealed class VideoCard : Panel
-{
-    readonly NativePeer peer;
-    readonly Panel video = new() { Dock = DockStyle.Fill, BackColor = Color.Black };
-    readonly Button sound = Ui.Button("Enable sound");
-    internal IntPtr VideoHandle => video.Handle;
-    internal bool Sound { get; private set; }
-    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)] internal bool Active { get; set; }
-    internal event Action? Stop;
-    internal VideoCard(NativePeer peer)
-    {
-        this.peer = peer; BackColor = Color.Black; Margin = new Padding(4); MinimumSize = new Size(200,180);
-        var caption = new Panel { Dock = DockStyle.Bottom, Height = 42, BackColor = Ui.Background };
-        var name = Ui.Label(peer.Name,8); name.AutoEllipsis=true;
-        var stop = Ui.Button("Stop watching"); stop.Font=sound.Font=Ui.Font(10);
-        caption.Resize+=(_,_)=>
-        {
-            int P(int n)=>Ui.Px(this,n); bool narrow=caption.Width<P(380); caption.Height=P(narrow?76:46);
-            if(narrow) { name.SetBounds(P(10),0,caption.Width-P(20),P(27)); int w=Math.Max(P(70),(caption.Width-P(28))/2); sound.SetBounds(P(10),P(32),w,P(30)); stop.SetBounds(P(18)+w,P(32),w,P(30)); }
-            else { name.SetBounds(P(10),0,Math.Max(1,caption.Width-P(236)),caption.Height); sound.SetBounds(caption.Width-P(222),P(8),P(102),P(30)); stop.SetBounds(caption.Width-P(112),P(8),P(102),P(30)); }
-        };
-        caption.Controls.Add(name); caption.Controls.Add(sound); caption.Controls.Add(stop); Controls.Add(video); Controls.Add(caption);
-        stop.Click += (_,_) => Stop?.Invoke(); sound.Click += (_,_) => { Sound = !Sound; sound.Text = Sound ? "Mute sound" : "Enable sound"; peer.SetView(VideoHandle,Sound); };
-    }
-}

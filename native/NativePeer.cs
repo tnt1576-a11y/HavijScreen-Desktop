@@ -12,12 +12,22 @@ internal sealed class NativePeer : IDisposable
     readonly object gate = new();
     readonly Pipeline pipeline;
     readonly bool headless;
+    readonly Action<IntPtr>? diagnosticFrame;
     readonly List<IntPtr> receiveBins = [];
     readonly List<Delegate> promises = [];
     readonly Channel<string> controls = System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(32) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
     readonly CancellationTokenSource lifetime = new();
     IntPtr rtc, videoSource, audioSource, channel, videoSink, volume;
     bool disposed;
+    readonly VideoDelivery delivery = new();
+    bool watchingUs;
+    long lastKeyframeRequest;
+    bool keyframePending;
+    IntPtr videoPad;
+    uint videoProbeId;
+    readonly Gst.PadProbe keyframeProbe;
+    internal long KeyframeRequests { get; private set; }
+    internal event Action? KeyframeRequested;
     readonly uint videoSsrc;
     int statsPending;
     IntPtr targetWindow;
@@ -27,7 +37,11 @@ internal sealed class NativePeer : IDisposable
     internal string Name { get; set; }
     internal bool ChannelOpen { get; private set; }
     internal bool Established { get; private set; }
-    internal bool WatchingUs { get; set; }
+    internal bool WatchingUs
+    {
+        get { lock(gate) return watchingUs; }
+        set { lock(gate) { if(value && !watchingUs) { delivery.Reset(); QueueKeyframeRequest(); } watchingUs=value; } }
+    }
     internal bool Subscribed { get; set; }
     internal bool Sharing { get; set; }
     internal bool AudioEnabled { get; private set; }
@@ -43,8 +57,10 @@ internal sealed class NativePeer : IDisposable
     static TaskCompletionSource<T> NewCompletion<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void Handoff(IntPtr sender, IntPtr buffer, IntPtr pad, IntPtr data);
 
-    internal NativePeer(string id, string name, bool initiator, bool stun, bool diagnostic = false)
+    internal NativePeer(string id, string name, bool initiator, bool stun, bool diagnostic = false, Action<IntPtr>? diagnosticFrame = null)
     {
+        if(diagnosticFrame!=null && !diagnostic) throw new ArgumentException("Frame inspection is restricted to synthetic diagnostics.");
+        this.diagnosticFrame=diagnosticFrame;
         Id = id; Name = name; headless = diagnostic;
         _ = Task.Run(async () =>
         {
@@ -53,13 +69,25 @@ internal sealed class NativePeer : IDisposable
             catch (Exception error) { if (!disposed) Failed?.Invoke(error.Message); }
         });
         videoSsrc = (uint)RandomNumberGenerator.GetInt32(1,int.MaxValue); int audioSsrc = RandomNumberGenerator.GetInt32(1,int.MaxValue);
+        string sendFixture=headless?"identity name=send-fixture ! ":"";
         string impairment=headless?"identity name=network-fixture ! ":"";
         string description = "webrtcbin name=rtc bundle-policy=max-bundle latency=80 "
-            + $"appsrc name=sendvideo is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=3 leaky-type=downstream caps=\"video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline\" ! queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtph264pay pt=96 ssrc={videoSsrc} config-interval=-1 aggregate-mode=zero-latency ! {impairment}application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96,packetization-mode=(string)1,ssrc=(uint){videoSsrc} ! rtc. "
+            + $"appsrc name=sendvideo is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=3 max-bytes=0 max-time=0 leaky-type=none caps=\"video/x-h264,stream-format=byte-stream,alignment=au,profile=constrained-baseline\" ! {sendFixture}rtph264pay pt=96 ssrc={videoSsrc} config-interval=-1 aggregate-mode=zero-latency ! {impairment}application/x-rtp,media=video,encoding-name=H264,clock-rate=90000,payload=96,packetization-mode=(string)1,ssrc=(uint){videoSsrc} ! rtc. "
             + $"appsrc name=sendaudio is-live=true format=time block=false min-latency=0 max-latency=0 max-buffers=8 leaky-type=downstream caps=\"audio/x-opus,rate=48000,channels=2,channel-mapping-family=0\" ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtpopuspay pt=111 ssrc={audioSsrc} ! application/x-rtp,media=audio,encoding-name=OPUS,clock-rate=48000,payload=111,encoding-params=(string)2,ssrc=(uint){audioSsrc} ! rtc.";
         pipeline = new Pipeline(description);
         pipeline.Failed += message => Failed?.Invoke(message);
         rtc = Gst.Named(pipeline.Handle,"rtc"); videoSource = Gst.Named(pipeline.Handle,"sendvideo"); audioSource = Gst.Named(pipeline.Handle,"sendaudio");
+        // RTCP PLI/FIR reaches this appsrc, but the encoder is in a separate
+        // shared capture pipeline. Forward requests without blocking native threads.
+        keyframeProbe = (_,info,_) =>
+        {
+            IntPtr evt=Gst.gst_pad_probe_info_get_event(info);
+            if(evt!=IntPtr.Zero && Gst.gst_video_event_is_force_key_unit(evt)!=0)
+                lock(gate) { if(!disposed) QueueKeyframeRequest(); }
+            return 1; // GST_PAD_PROBE_OK
+        };
+        videoPad=Gst.gst_element_get_static_pad(videoSource,"src");
+        videoProbeId=Gst.gst_pad_add_probe(videoPad,1<<7,keyframeProbe,IntPtr.Zero,IntPtr.Zero);
         if (stun) Gst.SetString(rtc,"stun-server","stun://stun.cloudflare.com:3478",IntPtr.Zero);
         pipeline.Connect(rtc,"notify::ice-gathering-state",new Gst.Notify((_,_,_) =>
         {
@@ -204,11 +232,36 @@ internal sealed class NativePeer : IDisposable
             return success != 0;
         }
     }
+    void QueueKeyframeRequest()
+    {
+        if(keyframePending || disposed) return;
+        keyframePending=true;
+        int delay=(int)Math.Max(0,500-(Environment.TickCount64-lastKeyframeRequest));
+        _=Task.Run(async()=>
+        {
+            try
+            {
+                if(delay>0) await Task.Delay(delay,lifetime.Token);
+                lock(gate)
+                {
+                    keyframePending=false;
+                    if(disposed || !watchingUs) return;
+                    lastKeyframeRequest=Environment.TickCount64; KeyframeRequests++;
+                }
+                KeyframeRequested?.Invoke();
+            }
+            catch(OperationCanceledException) { }
+        });
+    }
     internal void Push(bool isAudio, IntPtr encoded, ulong absoluteTime)
     {
         lock (gate)
         {
             if (disposed || !ChannelOpen || !WatchingUs) return;
+            if(!isAudio && !delivery.Accept((Gst.gst_buffer_get_flags(encoded)&(1u<<13))==0,Gst.gst_app_src_get_current_level_buffers(videoSource)))
+            {
+                QueueKeyframeRequest(); return;
+            }
             IntPtr copy = Gst.gst_buffer_copy(encoded); // Metadata only; encoded payload memory is shared.
             ulong baseTime = Gst.gst_element_get_base_time(pipeline.Handle);
             ulong pts = absoluteTime > baseTime ? absoluteTime-baseTime : 0;
@@ -221,6 +274,11 @@ internal sealed class NativePeer : IDisposable
     {
         if(!headless||fraction<0||fraction>.5) throw new InvalidOperationException("Packet loss injection is restricted to diagnostic peers.");
         lock(gate) { ObjectDisposedException.ThrowIf(disposed,this); IntPtr fixture=Gst.Named(pipeline.Handle,"network-fixture"); try { Gst.gst_util_set_object_arg(fixture,"drop-probability",fraction.ToString(System.Globalization.CultureInfo.InvariantCulture)); } finally { Gst.gst_object_unref(fixture); } }
+    }
+    internal void DiagnosticSenderDelay(uint microseconds)
+    {
+        if(!headless) throw new InvalidOperationException("Delay is restricted to diagnostic peers.");
+        lock(gate) { ObjectDisposedException.ThrowIf(disposed,this); IntPtr fixture=Gst.Named(pipeline.Handle,"send-fixture"); try { Gst.gst_util_set_object_arg(fixture,"sleep-time",microseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)); } finally { Gst.gst_object_unref(fixture); } }
     }
     internal async Task<NetworkFeedback?> Feedback(CancellationToken cancellation)
     {
@@ -282,7 +340,7 @@ internal sealed class NativePeer : IDisposable
             bool isVideo = text.Contains("media=(string)video") || text.Contains("media=video");
             if (!isAudio && !isVideo) return;
             string chain = isVideo
-                ? "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 leaky=downstream ! rtph264depay ! h264parse ! d3d11h264dec ! identity name=frame-counter signal-handoffs=true silent=true ! " + (headless ? "fakesink name=receiver sync=false" : "d3d11videosink name=receiver sync=false async=false enable-last-sample=false")
+                ? "queue max-size-buffers=0 max-size-bytes=2097152 max-size-time=200000000 ! rtph264depay request-keyframe=true wait-for-keyframe=true ! video/x-h264,alignment=au ! h264parse ! d3d11h264dec ! queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! identity name=frame-counter signal-handoffs=true silent=true ! " + (diagnosticFrame!=null ? "d3d11download ! video/x-raw,format=NV12 ! appsink name=receiver emit-signals=true sync=false max-buffers=2 drop=false" : headless ? "fakesink name=receiver sync=false" : "d3d11videosink name=receiver sync=false async=false enable-last-sample=false")
                 : "queue max-size-time=200000000 max-size-buffers=0 max-size-bytes=0 ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! identity name=frame-counter signal-handoffs=true silent=true ! " + (headless ? "fakesink name=receiver sync=false" : "volume name=audio-volume mute=true ! wasapi2sink low-latency=true sync=true");
             IntPtr bin = Gst.gst_parse_bin_from_description(chain,1,out var error);
             if (error != IntPtr.Zero || bin == IntPtr.Zero) throw new InvalidOperationException(Gst.Error(error));
@@ -290,6 +348,17 @@ internal sealed class NativePeer : IDisposable
             IntPtr counter = Gst.Named(bin,"frame-counter");
             pipeline.Connect(counter,"handoff",new Gst.ObjectSignal((_,_,_) => { if (isVideo) Interlocked.Increment(ref frames); else Interlocked.Increment(ref audioPackets); }));
             Gst.gst_object_unref(counter);
+            if(isVideo && diagnosticFrame!=null)
+            {
+                IntPtr sink=Gst.Named(bin,"receiver");
+                pipeline.Connect(sink,"new-sample",new Gst.NewSample((item,_)=>
+                {
+                    IntPtr sample=Gst.gst_app_sink_try_pull_sample(item,0);
+                    if(sample!=IntPtr.Zero) try { diagnosticFrame(Gst.gst_sample_get_buffer(sample)); } finally { Gst.gst_mini_object_unref(sample); }
+                    return 0;
+                }));
+                Gst.gst_object_unref(sink);
+            }
             if (!headless && isVideo)
             {
                 videoSink = Gst.Named(bin,"receiver");
@@ -312,7 +381,10 @@ internal sealed class NativePeer : IDisposable
         }
         // Native state changes can wait for streaming callbacks. Those callbacks
         // must be able to acquire gate, observe disposed, and return.
+        if(videoPad!=IntPtr.Zero) Gst.gst_pad_remove_probe(videoPad,videoProbeId);
         pipeline.Dispose();
+        if(videoPad!=IntPtr.Zero) { Gst.gst_object_unref(videoPad); videoPad=IntPtr.Zero; }
+        GC.KeepAlive(keyframeProbe);
         foreach (IntPtr pointer in new[] { channel,videoSink,volume,videoSource,audioSource,rtc }) if (pointer != IntPtr.Zero) Gst.g_object_unref(pointer);
         channel = videoSink = volume = videoSource = audioSource = rtc = IntPtr.Zero;
         GC.KeepAlive(promises);

@@ -4,7 +4,7 @@
 
 A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.1/HavijScreen-0.5.1-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.1)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.2/HavijScreen-0.5.2-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.2)
 
 ## Run on Windows
 
@@ -21,7 +21,7 @@ Both people must use **0.3.0 or newer**. Native rooms cannot join the older WebV
 3. Their friend selects **Join a room**, enters the code and chooses **Request to join**. Letter case, spaces and dashes do not matter.
 4. The host chooses **Accept** or **Decline** in the room sidebar. There is no reply code to send back.
 5. Either person selects **Share your screen** or **Start sharing**, opens **Applications** or **Entire Screen**, and clicks the thumbnail to share. Hovering or focusing a card shows **Share Screen**. Use the refresh button to update the list.
-6. Their friend chooses **Watch stream**. Playback starts muted; choose **Enable sound** to listen.
+6. Their friend chooses **Watch stream**. Playback starts muted; choose **Enable sound** to listen. Choose **Fullscreen** to expand the video. Press **Esc**, **F11**, or **Exit fullscreen** to return; sound and stop-watching controls stay available.
 
 Rooms support four people. The host approves each person and can remove participants. Pending requests can wait up to ten minutes without opening a peer connection. **Disable room code** stops invitations while existing streams continue. Leaving as host closes the room. Room codes are not saved between sessions.
 
@@ -48,6 +48,8 @@ No microphone or camera access is requested. Application capture uses Windows Gr
 | Crisp | 1440p | 60 fps | 12 Mbps |
 
 Start with **Performance** for a demanding game. It begins at 720p/30, reduces capture to 20 or 15 fps if sustained encoding output falls behind, and cautiously tries a higher rate after recovery. Audio and peer connections keep running during these changes. It watches its own stream cadence, not the game's FPS or GPU utilization; it cannot detect every case where sharing affects a game. New preferences default to Performance; existing quality choices are preserved. The other presets keep a fixed capture-rate target.
+
+Both people should update to **0.5.2 or newer** for improved motion-video recovery. Damaged video waits for a fresh keyframe instead of displaying broken blocks; severe packet loss can briefly freeze the picture.
 
 Actual frame rate depends on the source, GPU and network. HavijScreen also lowers video bitrate when viewers report packet loss or rising network delay, then gradually raises it as the connection recovers, up to the selected preset's target. Choose a lower preset if the stream remains difficult to watch.
 
@@ -92,6 +94,6 @@ On Windows x64, with PowerShell and internet access:
 .\scripts\build-native.ps1
 ```
 
-The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.1/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.2/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
 `npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

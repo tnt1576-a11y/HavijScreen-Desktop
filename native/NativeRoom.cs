@@ -73,6 +73,7 @@ internal sealed class NativeRoom : IDisposable
             if (hostPending) End(error); else Notice?.Invoke(error);
         };
         peer.Message += text => Handle(peer,text);
+        peer.KeyframeRequested += () => { _=RequestKeyframe(peer); };
         _ = Task.Run(async () =>
         {
             try
@@ -88,6 +89,30 @@ internal sealed class NativeRoom : IDisposable
             catch (OperationCanceledException) { }
         });
         Changed?.Invoke(); return peer;
+    }
+    int keyframePending;
+    long lastKeyframeRequest;
+    async Task RequestKeyframe(NativePeer peer)
+    {
+        if(disposed || !peer.WatchingUs || !peers.TryGetValue(peer.Id,out var current) || !ReferenceEquals(current,peer)) return;
+        if(Interlocked.Exchange(ref keyframePending,1)!=0) return;
+        try
+        {
+            // All viewers share one encoder. Coalesce their requests, including
+            // a trailing request during the cooldown, rather than discarding it.
+            int delay=(int)Math.Max(0,500-(Environment.TickCount64-Interlocked.Read(ref lastKeyframeRequest)));
+            if(delay>0) await Task.Delay(delay,lifetime.Token);
+            await mediaGate.WaitAsync(lifetime.Token);
+            try
+            {
+                if(!disposed && Sharing && Viewers>0 && capture?.RequestKeyframe()==true)
+                    Interlocked.Exchange(ref lastKeyframeRequest,Environment.TickCount64);
+            }
+            finally { mediaGate.Release(); }
+        }
+        catch(OperationCanceledException) { }
+        catch(Exception error) { if(!disposed) Notice?.Invoke("Video recovery: "+error.Message); }
+        finally { Interlocked.Exchange(ref keyframePending,0); }
     }
     object Info() => new { width = quality.Width, height = quality.Height, fps = TargetFps, audio, appAudio = source?.Monitor == false && audio };
     async Task Handle(NativePeer peer, string text)
