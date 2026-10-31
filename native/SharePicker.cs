@@ -5,7 +5,7 @@ namespace HavijScreen.Native;
 
 internal sealed class ShareOptions
 {
-    internal string Mode="Custom";
+    internal string Mode="Performance";
     internal int Height=1080,Fps=60;
     internal bool Cursor=true;
     internal static readonly int[] Resolutions=[0,480,720,1080,1440];
@@ -14,14 +14,15 @@ internal sealed class ShareOptions
     {
         get
         {
-            int height=Mode=="Gaming"?1440:Mode=="Screenshare"?0:Height, fps=Mode=="Gaming"?60:Mode=="Screenshare"?15:Fps;
+            if(Mode=="Performance") return Quality.Performance;
+            int height=Mode=="High quality"?1440:Mode=="Screenshare"?0:Height, fps=Mode=="High quality"?60:Mode=="Screenshare"?15:Fps;
             int width=height switch { 480=>854,720=>1280,1080=>1920,1440=>2560,_=>0 };
             int kbps=height switch { 480=>fps==60?2500:1500,720=>fps==60?5000:2500,1080=>fps==60?8000:5000,1440=>fps==60?12000:8000,_=>fps==60?10000:6000 };
             if(fps==15) kbps=Math.Max(1500,kbps*3/5);
             return new($"{Mode} · {(height==0?"Source":height+"p")} / {fps} fps",width,height,fps,kbps);
         }
     }
-    internal string Summary=>$"{(Quality.Height==0?"Source":Quality.Height+"p")}  ·  {Quality.Fps}fps";
+    internal string Summary=>$"{(Quality.Height==0?"Source":Quality.Height+"p")}  ·  {(Quality.PrioritizeGame?"up to ":"")}{Quality.Fps}fps";
 }
 
 internal sealed class PickerTab : Button
@@ -61,7 +62,7 @@ internal sealed class SourceDialog : DarkDialog
     internal string SelectedMode=>options.Mode;
     internal SourceDialog(Quality? current=null,string currentMode="Custom",bool cursor=true,IReadOnlyList<CaptureSource>? fixtures=null,IReadOnlyList<CaptureSource>? monitorFixtures=null)
     {
-        options=new() { Mode=currentMode is "Gaming" or "Screenshare"?currentMode:"Custom", Height=current?.Height??1080,Fps=current?.Fps??60,Cursor=cursor };
+        options=new() { Mode=current?.PrioritizeGame==true?"Performance":currentMode=="Gaming"?"High quality":currentMode is "High quality" or "Screenshare"?currentMode:"Custom", Height=current?.Height??1080,Fps=current?.Fps??60,Cursor=cursor };
         fixtureSources=fixtures; fixtureMonitors=monitorFixtures; HideHeader=true; Header.Visible=false; Text="Choose what to share";
         BackColor=Content.BackColor=SourceTile.PickerBack; ClientSize=new Size(960,Math.Min(748,Screen.FromPoint(System.Windows.Forms.Cursor.Position).WorkingArea.Height-70)); MinimumSize=new Size(760,560);
         foreach(var button in new[]{refresh,close}) { button.Kind=ButtonKind.Text; button.ForeColor=Color.FromArgb(224,230,235); }
@@ -149,7 +150,7 @@ internal sealed class StreamSettings : UserControl
         void Apply() { changed(); ShowSection(section); }
         if(section=="main")
         {
-            Header("Stream Mode"); Row("Gaming",()=>{ options.Mode="Gaming"; Apply(); },"Smoother video (1440p, 60fps)",options.Mode=="Gaming"); Row("Screenshare",()=>{ options.Mode="Screenshare"; Apply(); },"Clearer text (Source, 15fps)",options.Mode=="Screenshare"); Row("Custom",()=>{ options.Mode="Custom"; Apply(); },selected:options.Mode=="Custom");
+            Header("Stream Mode"); Row("Performance",()=>{ options.Mode="Performance"; Apply(); },"Lower capture load (720p, up to 30fps)",options.Mode=="Performance"); Row("High quality",()=>{ options.Mode="High quality"; Apply(); },"More detail (1440p, 60fps)",options.Mode=="High quality"); Row("Screenshare",()=>{ options.Mode="Screenshare"; Apply(); },"Clearer text (Source, 15fps)",options.Mode=="Screenshare"); Row("Custom",()=>{ options.Mode="Custom"; Apply(); },selected:options.Mode=="Custom");
             Line(); Row("Screen Resolution",()=>ShowSection("resolution"),arrow:true); Row("Frame Rate",()=>ShowSection("fps"),arrow:true); Line(); Row("Mute stream audio",()=>{ toggleAudio(); Apply(); },description:audioScope(),selected:!hasAudio(),check:true); Row("Advanced",()=>ShowSection("advanced"),arrow:true);
         }
         else
@@ -157,7 +158,7 @@ internal sealed class StreamSettings : UserControl
             Row("‹  Stream settings",()=>ShowSection("main")); Line();
             if(section=="resolution") { Header("Screen Resolution"); foreach(int value in ShareOptions.Resolutions) Row(value==0?"Source":value+"p",()=>{ int fps=options.Quality.Fps; options.Mode="Custom"; options.Height=value; options.Fps=fps; Apply(); },selected:options.Quality.Height==value); }
             else if(section=="fps") { Header("Frame Rate"); foreach(int value in ShareOptions.FrameRates) Row(value+" fps",()=>{ int height=options.Quality.Height; options.Mode="Custom"; options.Height=height; options.Fps=value; Apply(); },selected:options.Quality.Fps==value); }
-            else { Header("Advanced"); Row("Capture cursor",()=>{ options.Cursor=!options.Cursor; Apply(); },selected:options.Cursor,check:true); Line(); Row("Reset quality to Efficient",()=>{ options.Mode="Custom"; options.Height=720; options.Fps=30; options.Cursor=true; Apply(); }); }
+            else { Header("Advanced"); Row("Capture cursor",()=>{ options.Cursor=!options.Cursor; Apply(); },selected:options.Cursor,check:true); Line(); Row("Reset to Performance",()=>{ options.Mode="Performance"; options.Cursor=true; Apply(); }); }
         }
         Height=y+P(12); ResumeLayout(); Resized?.Invoke();
     }
@@ -178,7 +179,7 @@ internal sealed class StreamSettings : UserControl
             if(description.Length>0) { using var f=Ui.Font(10); TextRenderer.DrawText(g,description,f,new Rectangle(P(8),P(25),Width-P(32),P(18)),SourceTile.Muted,TextFormatFlags.NoPadding|TextFormatFlags.SingleLine); }
             var r=new Rectangle(Width-P(25),(Height-P(17))/2,P(17),P(17));
             if(arrow) Art.Icon(g,Glyph.ChevronRight,new(r.X,r.Y,r.Width,r.Height),SourceTile.Muted);
-            else if(check||Text is "Gaming" or "Screenshare" or "Custom"||Text.EndsWith("p")||Text.EndsWith("fps")||Text=="Source")
+            else if(check||Text is "Performance" or "High quality" or "Screenshare" or "Custom"||Text.EndsWith("p")||Text.EndsWith("fps")||Text=="Source")
             {
                 using var pen=new Pen(SourceTile.Muted); if(check) g.DrawRectangle(pen,r); else g.DrawEllipse(pen,r);
                 if(selected) { using var fill=new SolidBrush(Color.FromArgb(95,104,236)); if(check) { g.FillRectangle(fill,r); using var white=new Pen(Color.White,1.5f); g.DrawLines(white,[new(r.X+P(3),r.Y+P(8)),new(r.X+P(7),r.Y+P(12)),new(r.X+P(14),r.Y+P(4))]); } else { g.FillEllipse(fill,r); using var white=new SolidBrush(Color.White); g.FillEllipse(white,r.X+P(5),r.Y+P(5),P(7),P(7)); } }

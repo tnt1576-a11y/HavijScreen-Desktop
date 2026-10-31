@@ -6,7 +6,9 @@ namespace HavijScreen.Native;
 
 internal sealed record Quality(string Name, int Width, int Height, int Fps, int Kbps)
 {
-    internal static readonly Quality[] All = [new("Efficient · 720p / 30 fps",1280,720,30,2500), new("Balanced · 1080p / 30 fps",1920,1080,30,5000), new("Fluid · 1080p / 60 fps",1920,1080,60,8000), new("Crisp · 1440p / 60 fps",2560,1440,60,12000)];
+    internal bool PrioritizeGame { get; init; }
+    internal static readonly Quality Performance = new("Performance · 720p / auto",1280,720,30,2500) { PrioritizeGame=true };
+    internal static readonly Quality[] All = [new("Efficient · 720p / 30 fps",1280,720,30,2500), new("Balanced · 1080p / 30 fps",1920,1080,30,5000), new("Fluid · 1080p / 60 fps",1920,1080,60,8000), new("Crisp · 1440p / 60 fps",2560,1440,60,12000), Performance];
     public override string ToString() => Name;
 }
 internal sealed record CaptureSource(string Name, IntPtr Handle, uint ProcessId, bool Monitor)
@@ -38,13 +40,15 @@ internal static class Sources
         }
         else
         {
+            var images=new Dictionary<uint,string?>();
             EnumWindows((window, _) =>
             {
                 if (!IsWindowVisible(window) || GetWindow(window, 4) != IntPtr.Zero || (GetWindowLongPtr(window,-20) & 0x80) != 0) return true;
                 GetWindowThreadProcessId(window, out uint pid);
                 if (pid == Environment.ProcessId || pid == 0) return true;
                 var text = new StringBuilder(512); GetWindowText(window, text, text.Capacity);
-                if (text.Length > 0) result.Add(new(text.ToString(),window,pid,false)); return true;
+                if (text.Length == 0 || !SourceEligibility.CanOffer(window,pid,images)) return true;
+                result.Add(new(text.ToString(),window,pid,false)); return true;
             }, IntPtr.Zero);
             result.Sort((a,b) => StringComparer.CurrentCultureIgnoreCase.Compare(a.Name,b.Name));
         }
@@ -63,9 +67,10 @@ internal sealed class MediaCapture : IDisposable
 {
     Pipeline? video, audio, preview;
     readonly object previewGate=new();
-    IntPtr videoSink, audioSink, previewSink, previewSource, rawSink, previewValve, encoderElement;
+    IntPtr videoSink, audioSink, previewSink, previewSource, rawSink, previewValve, encoderElement, captureRate;
+    internal int TargetFps { get; private set; }
     internal int BitrateKbps { get; private set; }
-    bool disposed;
+    bool disposed, diagnostic;
     long frames, bytes, firstFrameTime, lastFrameTime;
     internal long Frames => Interlocked.Read(ref frames);
     internal long Bytes => Interlocked.Read(ref bytes);
@@ -93,7 +98,10 @@ internal sealed class MediaCapture : IDisposable
         string input = synthetic ? "videotestsrc is-live=true pattern=ball ! video/x-raw,format=BGRA,width=1920,height=1080 ! d3d11upload"
             : $"d3d11screencapturesrc capture-api=wgc show-cursor={source.CaptureCursor.ToString().ToLowerInvariant()} show-border=true " + (source.Monitor ? "monitor-handle=" : "window-handle=") + unchecked((ulong)source.Handle.ToInt64());
         string size=quality.Width>0&&quality.Height>0?$",width={quality.Width},height={quality.Height}":"";
-        string raw=$"{input} ! video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1 ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12{size}";
+        // Allow in-flight frames using the old cadence while the source handles
+        // a reconfigure event; rejecting them immediately can stop WGC.
+        string raw=$"{input} ! capsfilter name=capture-rate caps-change-mode=delayed caps=\"video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1\" ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12{size}";
+        if(synthetic) raw+=" ! identity name=capture-fixture silent=true";
         string playback="valve name=preview-valve drop=true drop-mode=forward-sticky-events ! appsink name=raw-preview emit-signals=true sync=false async=false max-buffers=1 drop=true wait-on-eos=false enable-last-sample=false";
         if(!encode) return raw+" ! "+playback;
         string encoding=$"{EncoderSettings(encoder,quality)} ! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au ! h264parse config-interval=-1 ! appsink name=encoded-video emit-signals=true sync=false max-buffers=2 drop=true";
@@ -117,9 +125,11 @@ internal sealed class MediaCapture : IDisposable
         if (!synthetic) Sources.Validate(source);
         if(!encode&&previewWindow==IntPtr.Zero) throw new InvalidOperationException("A local preview window is required.");
         Encoder = encode?SelectEncoder():"";
+        diagnostic=synthetic;
         try
         {
             video = new Pipeline(VideoPipeline(source,quality,Encoder,synthetic,previewWindow!=IntPtr.Zero,encode));
+            captureRate=Gst.Named(video.Handle,"capture-rate"); TargetFps=quality.Fps;
             video.Failed += message => Failed?.Invoke("Video capture: " + message);
             video.Ended += () => { if (!disposed) Failed?.Invoke("The selected capture source closed."); };
             if(encode) { videoSink = Gst.Named(video.Handle,"encoded-video"); video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false))); encoderElement=Gst.Named(video.Handle,"encoder"); BitrateKbps=quality.Kbps; }
@@ -137,6 +147,22 @@ internal sealed class MediaCapture : IDisposable
             video.Play(); audio?.Play();
         }
         catch { Dispose(); throw; }
+    }
+    internal void DiagnosticDelay(uint microseconds)
+    {
+        if(!diagnostic||video==null) throw new InvalidOperationException("Capture delay is restricted to synthetic diagnostics.");
+        IntPtr fixture=Gst.Named(video.Handle,"capture-fixture");
+        try { Gst.gst_util_set_object_arg(fixture,"sleep-time",microseconds.ToString(System.Globalization.CultureInfo.InvariantCulture)); }
+        finally { Gst.gst_object_unref(fixture); }
+    }
+    internal void SetFrameRate(int fps)
+    {
+        if(fps is not (15 or 20 or 30)) throw new ArgumentOutOfRangeException(nameof(fps));
+        if(disposed||captureRate==IntPtr.Zero||fps==TargetFps) return;
+        // Renegotiate capture cadence in place; leave audio and peer connections
+        // running. No additional frames are captured just to discard them.
+        Gst.gst_util_set_object_arg(captureRate,"caps",$"video/x-raw(memory:D3D11Memory),framerate={fps}/1");
+        TargetFps=fps;
     }
     internal void SetBitrate(int kbps)
     {
@@ -220,7 +246,7 @@ internal sealed class MediaCapture : IDisposable
         audio?.Dispose(); video?.Dispose(); audio = video = null;
         if (audioSink != IntPtr.Zero) Gst.gst_object_unref(audioSink);
         if (videoSink != IntPtr.Zero) Gst.gst_object_unref(videoSink);
-        foreach(var element in new[]{rawSink,previewValve,encoderElement}) if(element!=IntPtr.Zero) Gst.gst_object_unref(element);
-        audioSink = videoSink = rawSink = previewValve = encoderElement = IntPtr.Zero;
+        foreach(var element in new[]{rawSink,previewValve,encoderElement,captureRate}) if(element!=IntPtr.Zero) Gst.gst_object_unref(element);
+        audioSink = videoSink = rawSink = previewValve = encoderElement = captureRate = IntPtr.Zero;
     }
 }

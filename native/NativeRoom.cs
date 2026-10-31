@@ -19,6 +19,8 @@ internal sealed class NativeRoom : IDisposable
     internal Task Completion { get; private set; } = Task.CompletedTask;
     int captureGeneration;
     NetworkRate rates=new(Quality.All[0].Kbps);
+    readonly PerformanceRate performance=new();
+    internal int TargetFps=>runningGeneration==captureGeneration?capture?.TargetFps??quality.Fps:quality.Fps;
     internal int BitrateKbps=>capture?.BitrateKbps??0;
     internal int FeedbackSamples { get; private set; }
     string name = "Player";
@@ -87,7 +89,7 @@ internal sealed class NativeRoom : IDisposable
         });
         Changed?.Invoke(); return peer;
     }
-    object Info() => new { width = quality.Width, height = quality.Height, fps = quality.Fps, audio, appAudio = source?.Monitor == false && audio };
+    object Info() => new { width = quality.Width, height = quality.Height, fps = TargetFps, audio, appAudio = source?.Monitor == false && audio };
     async Task Handle(NativePeer peer, string text)
     {
         if (disposed || !peers.ContainsKey(peer.Id)) return;
@@ -172,6 +174,12 @@ internal sealed class NativeRoom : IDisposable
     IntPtr previewWindow, runningPreview;
     bool runningEncode;
     internal long PreviewFrames => capture?.PreviewFrames??0;
+    internal async Task DiagnosticCaptureDelay(uint microseconds)
+    {
+        await mediaGate.WaitAsync();
+        try { if(!diagnostic||!synthetic||capture==null) throw new InvalidOperationException("Synthetic diagnostic capture required."); capture.DiagnosticDelay(microseconds); }
+        finally { mediaGate.Release(); }
+    }
     internal async Task Preview(IntPtr window) { if(previewWindow==window) return; previewWindow=window; await ReconcileMedia(); Changed?.Invoke(); }
     async Task ReconcileMedia()
     {
@@ -192,7 +200,7 @@ internal sealed class NativeRoom : IDisposable
                 next.Packet += (isAudio,buffer,time) => { foreach (var peer in Volatile.Read(ref outgoing)) peer.Push(isAudio,buffer,time); };
                 next.Failed += error => { _ = CaptureFailed(next,error); };
                 next.PreviewFailed += error => { _ = PreviewFailed(next,error); };
-                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; rates=new(quality.Kbps); if(encode) EncoderStarts++; }
+                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; rates=new(quality.Kbps); performance.Reset(Environment.TickCount64,next.Frames); if(encode) EncoderStarts++; }
                 catch(Exception error) { next.Dispose(); ClearFailedShare(error.Message); }
             }
             else if(capture!=null&&runningPreview!=preview)
@@ -211,6 +219,13 @@ internal sealed class NativeRoom : IDisposable
             while(await timer.WaitForNextTickAsync(lifetime.Token))
             {
                 var active=Volatile.Read(ref outgoing); if(active.Length==0||!Sharing) continue;
+                await mediaGate.WaitAsync(lifetime.Token);
+                try
+                {
+                    if(!disposed&&Sharing&&capture!=null&&runningEncode&&runningGeneration==captureGeneration&&quality.PrioritizeGame)
+                        capture.SetFrameRate(performance.Observe(Environment.TickCount64,capture.Frames));
+                }
+                finally { mediaGate.Release(); }
                 int generation=captureGeneration;
                 var feedback=await Task.WhenAll(active.Select(async p=>(Peer:p,Value:await p.Feedback(lifetime.Token))));
                 await mediaGate.WaitAsync(lifetime.Token);

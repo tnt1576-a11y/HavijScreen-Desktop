@@ -11,7 +11,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>../desktop/havijscreen.ico</ApplicationIcon>
     <AssemblyName>HavijScreen</AssemblyName>
-    <Version>0.4.1</Version>
+    <Version>0.5.0</Version>
     <Deterministic>true</Deterministic>
     <DebugType>embedded</DebugType>
   </PropertyGroup>

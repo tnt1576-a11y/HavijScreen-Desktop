@@ -21,7 +21,7 @@ internal sealed class MainForm : NativeForm
     readonly SharingBanner banner = new();
     readonly LocalPreviewToggle preview=new();
     readonly Panel localCard=new() { BackColor=Color.Black,Margin=new Padding(4),Visible=false,AccessibleName="Local preview" }, localVideo=new() { Dock=DockStyle.Fill,BackColor=Color.Black };
-    string streamMode="Custom";
+    string streamMode="Performance";
     bool captureCursor=true, updatingQuality;
     bool layoutReady;
     readonly FlowLayoutPanel people = new() { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = Padding.Empty };
@@ -51,7 +51,7 @@ internal sealed class MainForm : NativeForm
         quality.SelectedIndexChanged += async (_,_) =>
         {
             if(updatingQuality) return;
-            streamMode="Custom";
+            streamMode=quality.SelectedItem?.PrioritizeGame==true?"Performance":"Custom";
             SaveSettings(); if (room.Sharing && currentSource != null) try { await room.Share(currentSource,(Quality)quality.SelectedItem!,sourceLabel.Tag is true); } catch(Exception error) { ShowNotice(error.Message); }
         };
         preview.CheckedChanged+=async(_,_)=>{ Render(); await UpdateLocalPreview(); };
@@ -98,9 +98,9 @@ internal sealed class MainForm : NativeForm
         invite.Kind=ButtonKind.Invite; invite.Symbol=Glyph.Plus; invite.TrailingArrow=true;
         join.Kind=finish.Kind=leave.Kind=ButtonKind.Text; join.Symbol=Glyph.Link; join.Text="Join a friend's room"; join.ForeColor=finish.ForeColor=Ui.Muted; leave.ForeColor=Color.FromArgb(227,162,139);
         share.Symbol=hero.Symbol=Glyph.Screen; share.TrailingArrow=hero.TrailingArrow=true;
-        quality.Items.AddRange(Quality.All); quality.SelectedIndex=0; quality.AccessibleName="Stream quality";
-        qualityHint.Text="A lighter load. More room for your game."; qualityHint.AutoEllipsis=true;
-        quality.SelectedIndexChanged+=(_,_)=>{ qualityHint.Text=quality.SelectedIndex switch { 1=>"More detail, with a moderate frame rate.",2=>"Smoother motion for fast-paced games.",3=>"Extra detail. More GPU and upload use.",_=>"A lighter load. More room for your game." }; };
+        quality.Items.AddRange(Quality.All); quality.SelectedIndex=Array.IndexOf(Quality.All,Quality.Performance); quality.AccessibleName="Stream quality";
+        qualityHint.Text="Lowers capture rate if it falls behind."; qualityHint.AutoEllipsis=true;
+        quality.SelectedIndexChanged+=(_,_)=>{ qualityHint.Text=quality.SelectedItem?.PrioritizeGame==true?"Lowers capture rate if it falls behind.":quality.SelectedIndex switch { 1=>"More detail, with a moderate frame rate.",2=>"Smoother motion for fast-paced games.",3=>"Extra detail. More GPU and upload use.",_=>"A lighter load. More room for your game." }; };
         sourceLabel.AutoEllipsis=true; sourceLabel.TextAlign=ContentAlignment.TopLeft;
         shortcut.TextAlign=ContentAlignment.MiddleCenter;
         actions.Controls.AddRange([invite,join,finish,leave]); left.Controls.AddRange([roomHeading,count,nameHeading,displayName,peopleHeading,people,actions]);
@@ -261,7 +261,7 @@ internal sealed class MainForm : NativeForm
         try
         {
             quality.SelectedIndex=-1; if(quality.Items.Count>Quality.All.Length) quality.Items.RemoveRange(Quality.All.Length,quality.Items.Count-Quality.All.Length);
-            int index=Array.FindIndex(Quality.All,q=>q.Width==selected.Width&&q.Height==selected.Height&&q.Fps==selected.Fps&&q.Kbps==selected.Kbps);
+            int index=Array.FindIndex(Quality.All,q=>q.Width==selected.Width&&q.Height==selected.Height&&q.Fps==selected.Fps&&q.Kbps==selected.Kbps&&q.PrioritizeGame==selected.PrioritizeGame);
             if(index<0) { quality.Items.Add(selected); index=quality.Items.Count-1; }
             quality.SelectedIndex=index;
         }
@@ -292,7 +292,7 @@ internal sealed class MainForm : NativeForm
         if (tick-lastTick >= 500) { lastBytes = total; lastTick = tick; }
         string encoder = room.Encoder switch { "nvd3d11h264enc" => "NVIDIA NVENC", "amfh264enc" => "AMD AMF", "qsvh264enc" => "Intel Quick Sync", _ => room.Sharing ? "Waiting for a viewer" : "—" };
         var selected = (Quality)quality.SelectedItem!;
-        stats.UpdateValues(room.Sharing ? $"{(selected.Height==0?"Source":selected.Height+"p")} / {selected.Fps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
+        stats.UpdateValues(room.Sharing ? $"{(selected.Height==0?"Source":selected.Height+"p")} / {room.TargetFps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
     }
     void ShowNotice(string message) { state.Text = message; state.ForeColor = Color.FromArgb(234,171,141); }
     void ReadSettings()
@@ -302,13 +302,21 @@ internal sealed class MainForm : NativeForm
             if (!File.Exists(SettingsPath) || new FileInfo(SettingsPath).Length > 4096) return;
             using var json = JsonDocument.Parse(File.ReadAllText(SettingsPath)); var value = json.RootElement;
             if (SetupCrypto.ValidName(value.Text("name",32))) displayName.Text = value.Text("name",32);
-            if(value.Int("quality")>=Quality.All.Length&&ShareOptions.Resolutions.Contains(value.Int("height"))&&ShareOptions.FrameRates.Contains(value.Int("fps"))) SelectQuality(new ShareOptions { Height=value.Int("height"),Fps=value.Int("fps") }.Quality);
-            else quality.SelectedIndex = Math.Clamp(value.Int("quality"),0,Quality.All.Length-1);
-            streamMode=value.Text("mode",16) is "Gaming"?"Gaming":value.Text("mode",16) is "Screenshare"?"Screenshare":"Custom";
+            var restored=RestoreQuality(value); streamMode=restored.Mode; SelectQuality(restored.Quality);
             captureCursor=!value.TryGetProperty("cursor",out var cursor)||cursor.ValueKind!=JsonValueKind.False;
             stun = value.Bool("stun"); room.Stun = stun;
         }
         catch { }
+    }
+    internal static (Quality Quality,string Mode) RestoreQuality(JsonElement value)
+    {
+        // Old custom entries used index 4, now occupied by Performance.
+        // Restore their dimensions unless the saved mode explicitly opts in.
+        string mode=value.Text("mode",16) switch { "Performance"=>"Performance","Gaming" or "High quality"=>"High quality","Screenshare"=>"Screenshare",_=>"Custom" };
+        if(mode=="Performance") return (Quality.Performance,mode);
+        if(value.Int("quality")>=4&&ShareOptions.Resolutions.Contains(value.Int("height"))&&ShareOptions.FrameRates.Contains(value.Int("fps")))
+            return (new ShareOptions { Mode=mode,Height=value.Int("height"),Fps=value.Int("fps") }.Quality,mode);
+        return (Quality.All[Math.Clamp(value.Int("quality"),0,3)],mode);
     }
     void SaveSettings()
     {

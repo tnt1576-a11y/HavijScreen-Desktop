@@ -83,6 +83,11 @@ while ($pending.Count) {
 }
 Copy-Item -LiteralPath (Join-Path $runtime 'packages.json') -Destination $native
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $output
+$benchmarkScripts=Join-Path $output 'scripts'
+$benchmarkDocs=Join-Path $output 'docs'
+New-Item -ItemType Directory -Path $benchmarkScripts,$benchmarkDocs -Force | Out-Null
+foreach($name in @('frame-metrics.ps1','benchmark-game.ps1','compare-game-benchmarks.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $benchmarkScripts }
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\game-performance.md') -Destination $benchmarkDocs
 if (-not (Test-Path (Join-Path $runtime 'licenses'))) { throw 'Run scripts/prepare-native-notices.ps1 before packaging.' }
 Copy-Item -LiteralPath (Join-Path $runtime 'licenses') -Destination $native -Recurse
 Copy-Item -LiteralPath (Join-Path $projectRoot 'native\THIRD-PARTY.md') -Destination $output

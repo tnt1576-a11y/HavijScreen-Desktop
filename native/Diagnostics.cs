@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace HavijScreen.Native;
 
-internal static class Diagnostics
+internal static partial class Diagnostics
 {
     internal static string? ProgressPath;
     static void Step(string text) { if (ProgressPath != null) File.AppendAllText(ProgressPath,DateTime.UtcNow.ToString("O")+" "+text+Environment.NewLine); }
@@ -25,6 +25,8 @@ internal static class Diagnostics
             bufferTimestampOffset = Gst.PtsOffset
         };
         if (args.Contains("--benchmark")) return Benchmark();
+        if (args.Contains("--performance-test")) return Performance().GetAwaiter().GetResult();
+        if (args.Contains("--performance-window-test")) return PerformanceWindow().GetAwaiter().GetResult();
         if (args.Contains("--rtc-test")) return DirectMedia().GetAwaiter().GetResult();
         if (args.Contains("--room-test")) return RoomRoundTrip().GetAwaiter().GetResult();
         if (args.Contains("--capture-test")) return WindowCapture().GetAwaiter().GetResult();
@@ -357,6 +359,7 @@ internal static class Diagnostics
             using var host=new NativeRoom(true) { Stun=false }; using var guest=new NativeRoom(true) { Stun=false };
             try
             {
+                CheckSourceEligibility();
                 using(var picker=new SourceDialog(fixtures:Array.Empty<CaptureSource>()))
                 {
                     const System.Reflection.BindingFlags flags=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
@@ -387,7 +390,7 @@ internal static class Diagnostics
                 await host.Share(new("Synthetic retry",IntPtr.Zero,0,false),Quality.All[0],false,true);
                 await Until(()=>receiver.Sharing,3000,"Retry share did not arrive."); guest.Watch(host.Id,IntPtr.Zero,true);
                 await Until(()=>receiver.VideoFrames>=30,6000,"Could not share again in the same room.");
-                WriteReport(args,new { audioChoicesPreserved=true,systemAudioDefaultMuted=true,closedSourceKeepsRoom=true,retryWithoutRejoining=true,rateBoundsAndMultipleViewers=true,staleFeedbackIgnored=true,disabledPreviewForwardsEndOfStream=true });
+                WriteReport(args,new { systemPickerEntriesExcluded=true,cloakedPickerWindowsExcluded=true,audioChoicesPreserved=true,systemAudioDefaultMuted=true,closedSourceKeepsRoom=true,retryWithoutRejoining=true,rateBoundsAndMultipleViewers=true,staleFeedbackIgnored=true,disabledPreviewForwardsEndOfStream=true });
             }
             catch(Exception error) { exit=1; WriteReport(args,new { error=error.ToString() }); }
             finally { host.Dispose(); guest.Dispose(); await Task.WhenAll(host.Completion,guest.Completion); form.Close(); }

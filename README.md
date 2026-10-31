@@ -4,7 +4,7 @@
 
 A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.4.1/HavijScreen-0.4.1-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.4.1)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.0/HavijScreen-0.5.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.0)
 
 ## Run on Windows
 
@@ -25,6 +25,8 @@ Both people must use **0.3.0 or newer**. Native rooms cannot join the older WebV
 
 Rooms support four people. The host approves each person and can remove participants. Pending requests can wait up to ten minutes without opening a peer connection. **Disable room code** stops invitations while existing streams continue. Leaving as host closes the room. Room codes are not saved between sessions.
 
+The Applications picker omits Windows Input Experience, Windows Settings, and windows hidden by the Windows compositor, including suspended app placeholders. Ordinary app windows remain available regardless of their title.
+
 **Stop sharing** ends capture. **Ctrl+Shift+S** stops sharing globally when the shortcut is available; an in-app shortcut remains available if Windows cannot register it.
 
 ## Application and screen audio
@@ -39,14 +41,17 @@ No microphone or camera access is requested. Windows may show its capture border
 
 | Preset | Resolution | Frame rate | Target video upload per viewer |
 | --- | --- | --- | --- |
+| Performance | 720p | 15–30 fps, adaptive | 2.5 Mbps |
 | Efficient | 720p | 30 fps | 2.5 Mbps |
 | Balanced | 1080p | 30 fps | 5 Mbps |
 | Fluid | 1080p | 60 fps | 8 Mbps |
 | Crisp | 1440p | 60 fps | 12 Mbps |
 
-Start with Efficient for a demanding game. Actual frame rate depends on the source, GPU and network. HavijScreen lowers video bitrate when viewers report packet loss or rising network delay, then gradually raises it as the connection recovers, up to the selected preset's target. Resolution and frame rate stay at your chosen settings. Choose a lower preset if the stream remains difficult to watch.
+Start with **Performance** for a demanding game. It begins at 720p/30, reduces capture to 20 or 15 fps if sustained encoding output falls behind, and cautiously tries a higher rate after recovery. Audio and peer connections keep running during these changes. It watches its own stream cadence, not the game's FPS or GPU utilization; it cannot detect every case where sharing affects a game. New preferences default to Performance; existing quality choices are preserved. The other presets keep a fixed capture-rate target.
 
-The source picker's gear menu also offers **Gaming** (1440p, 60 fps), **Screenshare** (source resolution, 15 fps), and **Custom**. Custom supports source resolution, 480p, 720p, 1080p or 1440p at 15, 30 or 60 fps. **Advanced** controls cursor capture. The bottom-left summary shows the settings that will apply when you click a source.
+Actual frame rate depends on the source, GPU and network. HavijScreen also lowers video bitrate when viewers report packet loss or rising network delay, then gradually raises it as the connection recovers, up to the selected preset's target. Choose a lower preset if the stream remains difficult to watch.
+
+The source picker's gear menu offers **Performance**, **High quality** (1440p, 60 fps; previously called Gaming), **Screenshare** (source resolution, 15 fps), and **Custom**. Custom supports source resolution, 480p, 720p, 1080p or 1440p at 15, 30 or 60 fps. **Advanced** controls cursor capture. The bottom-left summary shows the settings that will apply when you click a source.
 
 Capture, conversion and encoding use native Windows and GPU APIs. One hardware encode is shared among all viewers; each additional viewer adds upload and connection work. Three viewers at the Fluid preset can need roughly 24 Mbps of video upload, plus audio and network overhead.
 
@@ -59,6 +64,8 @@ Minimizing HavijScreen pauses local preview and incoming streams, then resumes t
 The UI uses native Windows controls. The media engine uses Windows Graphics Capture, D3D11, WASAPI process loopback, hardware H.264 and Opus through GStreamer. Raw captured video stays in the GPU capture/convert/encode path; the app distributes the encoded packets. Download size is larger than the older web version because the native runtimes are included.
 
 Capture, encoding and playback still consume resources. GPU contention, drivers and game settings affect FPS. HavijScreen has not been benchmarked across games or certified by anti-cheat vendors, and cannot promise zero FPS loss or universal compatibility. It does not inject DLLs into games, hook game graphics APIs, read game memory, install drivers or add an in-game overlay.
+
+To measure your own setup against sharing off or Discord, follow the [game performance comparison guide](docs/game-performance.md). Optional recording scripts save frame timings locally and compare average FPS, 1% lows and frame-time spikes. They do not run as part of normal sharing.
 
 ## Connection and privacy
 
@@ -85,6 +92,6 @@ On Windows x64, with PowerShell and internet access:
 .\scripts\build-native.ps1
 ```
 
-The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.4.1/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.0/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
 `npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

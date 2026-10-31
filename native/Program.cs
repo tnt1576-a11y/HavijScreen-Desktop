@@ -19,7 +19,7 @@ internal static class Program
             if (args.Contains("--viewer-test")) return Diagnostics.Viewer(args,runtime);
             if (args.Contains("--preview-test")) { Gst.Initialize(runtime); return Diagnostics.Preview(args); }
             if (args.Contains("--playback-test")) { Gst.Initialize(runtime); return Diagnostics.Playback(args); }
-            if (args.Contains("--probe") || args.Contains("--benchmark") || args.Contains("--self-test") || args.Contains("--tone") || args.Contains("--rtc-test") || args.Contains("--room-test") || args.Contains("--capture-test"))
+            if (args.Contains("--probe") || args.Contains("--benchmark") || args.Contains("--performance-test") || args.Contains("--performance-window-test") || args.Contains("--self-test") || args.Contains("--tone") || args.Contains("--rtc-test") || args.Contains("--room-test") || args.Contains("--capture-test"))
             {
                 Diagnostics.ProgressPath = report == null ? null : report+".steps.txt";
                 Gst.Initialize(runtime);
