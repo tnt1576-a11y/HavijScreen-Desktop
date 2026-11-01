@@ -29,7 +29,8 @@ internal static partial class Diagnostics
                 var media=await CheckSynchronizedResolution();
                 await CheckReconnectRoom();
                 await CheckPlayerControls(form,Program.Option(args,"report"));
-                WriteReport(args,new { media,resolutionHysteresis=true,sourceResolutionPreserved=true,briefInterruptionResumed=true,explicitLeaveImmediate=true,recoveryExpiry=true,volumeAndPopout=true,fullscreenIdleControls=true,performanceMeasurementAdded=false });
+                await CheckWatchingLifecycle();
+                WriteReport(args,new { media,resolutionHysteresis=true,sourceResolutionPreserved=true,briefInterruptionResumed=true,explicitLeaveImmediate=true,recoveryExpiry=true,volumeAndPopout=true,fullscreenIdleControls=true,stopWhileDisconnected=true,explicitStopDoesNotResume=true,replacementPeerControls=true,minimizeAndDockResume=true,performanceMeasurementAdded=false });
             }
             catch(Exception error) { exit=1; WriteReport(args,new { error=error.ToString() }); }
             finally { form.Close(); }
@@ -110,5 +111,67 @@ internal static partial class Diagnostics
         card.TogglePopout(); card.Active=false;
         if(card.IsDetached||Application.OpenForms.OfType<FullscreenVideoForm>().Any()) throw new InvalidOperationException("Stopping a stream left its pop-out open.");
         await Task.Delay(20);
+    }
+    static async Task CheckWatchingLifecycle()
+    {
+        const BindingFlags flags=BindingFlags.Instance|BindingFlags.NonPublic;
+        T Field<T>(object owner,string name)=>(T)owner.GetType().GetField(name,flags)!.GetValue(owner)!;
+        void Call(object owner,string name,params object[] args)=>owner.GetType().GetMethod(name,flags)!.Invoke(owner,args);
+        void Channel(NativePeer peer,bool open)=>typeof(NativePeer).GetProperty("ChannelOpen",flags)!.SetValue(peer,open);
+        using var window=new MainForm(Gst.RuntimePath);
+        window.Show();
+        var room=Field<NativeRoom>(window,"room");
+        try
+        {
+            await Until(()=>Field<bool>(window,"ready"),3000,"Viewing fixture did not initialize.");
+            var peer=room.AddPeer(SetupCrypto.Id(),"Synthetic viewer",true,true);
+            // Model an established channel's open/closed states without touching
+            // the network or capturing any desktop content.
+            Channel(peer,true); peer.Sharing=true;
+            Call(window,"Watch",peer);
+            var cards=Field<Dictionary<string,VideoCard>>(window,"cards");
+            var paused=Field<HashSet<string>>(window,"pausedViews");
+            var card=cards[peer.Id];
+            peer.SetView(card.VideoHandle,true);
+            Channel(peer,false);
+            Call(window,"StopWatching",peer.Id);
+            if(peer.Subscribed||peer.AudioEnabled||card.Active) throw new InvalidOperationException("Local stop was ignored while the control channel was closed.");
+            using(var message=System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(peer.WatchMessage())))
+                if(message.RootElement.Bool("active")) throw new InvalidOperationException("Recovery would resend a stopped subscription as active.");
+            Channel(peer,true); Call(window,"Watch",peer);
+            card.TogglePopout(); window.WindowState=FormWindowState.Minimized;
+            await Task.Delay(50);
+            Field<Button>(card,"stop").PerformClick();
+            if(peer.Subscribed||card.Active||card.IsDetached||paused.Contains(peer.Id)) throw new InvalidOperationException("Explicit pop-out stop was queued for resume.");
+            window.WindowState=FormWindowState.Normal; await Task.Delay(50);
+            if(peer.Subscribed||card.Active) throw new InvalidOperationException("Restoring the room resumed an explicitly stopped stream.");
+
+            // Ordinary minimization and closing a pop-out still pause/resume.
+            Call(window,"Watch",peer); window.WindowState=FormWindowState.Minimized;
+            if(peer.Subscribed||!paused.Contains(peer.Id)) throw new InvalidOperationException("Minimize did not pause the docked stream.");
+            window.WindowState=FormWindowState.Normal;
+            if(!peer.Subscribed||!card.Active) throw new InvalidOperationException("Restore did not resume a minimized stream.");
+            card.TogglePopout(); window.WindowState=FormWindowState.Minimized; card.ReturnToRoom();
+            if(peer.Subscribed||!paused.Contains(peer.Id)) throw new InvalidOperationException("Docking into a minimized room did not pause.");
+            window.WindowState=FormWindowState.Normal;
+            if(!peer.Subscribed||!card.Active) throw new InvalidOperationException("Restore did not resume a docked stream.");
+
+            room.Drop(peer.Id); await Task.Delay(50);
+            var replacement=room.AddPeer(peer.Id,"Synthetic replacement",true,true);
+            Channel(replacement,true); replacement.Sharing=true; Call(window,"Watch",replacement);
+            var current=cards[peer.Id];
+            if(ReferenceEquals(current,card)||!card.IsDisposed||!current.IsBoundTo(replacement)) throw new InvalidOperationException("Viewer retained the old peer connection.");
+            Field<TrackBar>(current,"volumeSlider").Value=37;
+            Field<Button>(current,"sound").PerformClick();
+            current.TogglePopout(); current.ToggleFullscreen(); current.ExitFullscreen(); current.ReturnToRoom();
+            if(replacement.VolumePercent!=37||!replacement.AudioEnabled||!replacement.Subscribed||Field<IntPtr>(replacement,"targetWindow")!=current.VideoHandle)
+                throw new InvalidOperationException("Replacement peer did not receive volume, sound or player-window updates.");
+        }
+        finally
+        {
+            room.Dispose(); await room.Completion;
+            window.Close();
+            await Until(()=>window.IsDisposed,3000,"Viewing fixture did not close.");
+        }
     }
 }

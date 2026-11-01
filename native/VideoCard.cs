@@ -23,6 +23,7 @@ internal sealed class VideoCard : Panel
     internal bool IsFullscreen=>fullscreenWindow?.Fullscreen==true;
     internal bool IsDetached=>fullscreenWindow!=null;
     internal bool ControlsVisible=>caption.Visible;
+    internal bool IsBoundTo(NativePeer value)=>ReferenceEquals(peer,value);
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     internal bool Active { get=>active; set { active=value; activity.Enabled=value; if(!value) ReturnToRoom(); } }
     internal event Action? Stop;
@@ -48,7 +49,7 @@ internal sealed class VideoCard : Panel
         options.Items.Add(connection);
         volumeSlider.ValueChanged+=(_,_)=>{ peer.SetVolume(volumeSlider.Value); volumeLabel.Text=$"Volume · {volumeSlider.Value}%"; Touch(); };
         more.Click+=(_,_)=>{ Touch(); options.Show(more,new Point(0,more.Height)); };
-        stop.Click+=(_,_)=>{ ReturnToRoom(); Stop?.Invoke(); };
+        stop.Click+=(_,_)=>{ Active=false; Stop?.Invoke(); };
         sound.Click+=(_,_)=>{ Touch(); Sound=!Sound; sound.Text=Sound?"Mute sound":"Enable sound"; peer.SetView(VideoHandle,Sound); };
         fullscreen.Click+=(_,_)=>ToggleFullscreen(); popout.Click+=(_,_)=>TogglePopout();
         video.HandleCreated+=(_,_)=>{ if(Active) peer.SetView(VideoHandle,Sound); };

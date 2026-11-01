@@ -200,7 +200,7 @@ internal sealed class MainForm : NativeForm
                 var watch = Ui.Button(peer.Subscribed ? "Stop watching" : "Watch stream"); watch.SetBounds(10,58,110,30);
                 watch.Symbol=peer.Subscribed?Glyph.Stop:Glyph.Screen;
                 card.Resize+=(_,_)=>watch.SetBounds(0,Ui.Px(card,53),Math.Max(1,card.Width-Ui.Px(card,42)),Ui.Px(card,30));
-                watch.Click += (_,_) => { if (peer.Subscribed) room.Watch(peer.Id,IntPtr.Zero,false); else Watch(peer); }; card.Controls.Add(watch);
+                watch.Click += (_,_) => { if (peer.Subscribed) StopWatching(peer.Id); else Watch(peer); }; card.Controls.Add(watch);
             }
             if (room.IsHost)
             {
@@ -211,12 +211,24 @@ internal sealed class MainForm : NativeForm
         }
         people.Controls.Add(card);
     }
+    void StopWatching(string id)
+    {
+        pausedViews.Remove(id);
+        if(cards.TryGetValue(id,out var card)) card.Active=false;
+        room.Watch(id,IntPtr.Zero,false);
+        ArrangeVideos();
+    }
     void Watch(NativePeer peer)
     {
+        if(cards.TryGetValue(peer.Id,out var previous) && !previous.IsBoundTo(peer))
+        {
+            pausedViews.Remove(peer.Id);
+            cards.Remove(peer.Id); videos.Controls.Remove(previous); previous.Dispose();
+        }
         if (!cards.TryGetValue(peer.Id,out var card))
         {
             card = new VideoCard(peer); cards[peer.Id] = card; videos.Controls.Add(card);
-            card.Stop += () => room.Watch(peer.Id,IntPtr.Zero,false);
+            card.Stop += () => StopWatching(peer.Id);
             card.Docked += () => { if(!closing && card.Active && WindowState==FormWindowState.Minimized) { pausedViews.Add(peer.Id); room.Watch(peer.Id,IntPtr.Zero,false); } };
         }
         card.Active = true; ArrangeVideos(); room.Watch(peer.Id,card.VideoHandle,true,card.Sound);

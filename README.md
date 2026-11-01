@@ -4,7 +4,7 @@
 
 A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.6.0/HavijScreen-0.6.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.6.0)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.6.1/HavijScreen-0.6.1-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.6.1)
 
 ## Run on Windows
 
@@ -55,7 +55,7 @@ No microphone or camera access is requested. Application capture uses Windows Gr
 
 Start with **Performance** for a demanding game. It begins at 720p/30, reduces capture to 20 or 15 fps if sustained encoding output falls behind, and cautiously tries a higher rate after recovery. Audio and peer connections keep running during these changes. It watches its own stream cadence, not the game's FPS or GPU utilization; it cannot detect every case where sharing affects a game. New preferences default to Performance; existing quality choices are preserved. The other presets keep a fixed capture-rate target.
 
-Both people should update to **0.6.0 or newer** for connection recovery and the latest playback improvements. Damaged video waits for a fresh keyframe instead of displaying broken blocks; severe packet loss can briefly freeze the picture.
+Both people should update to **0.6.1 or newer** for connection recovery and the latest playback improvements. Damaged video waits for a fresh keyframe instead of displaying broken blocks; severe packet loss can briefly freeze the picture.
 
 Received video and audio follow playback-clock timing. Video that is too late is discarded after decoding instead of building up a long playback queue.
 
@@ -102,6 +102,6 @@ On Windows x64, with PowerShell and internet access:
 .\scripts\build-native.ps1
 ```
 
-The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.6.0/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.6.1/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
 `npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

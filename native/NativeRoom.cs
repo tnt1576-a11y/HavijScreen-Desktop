@@ -334,7 +334,9 @@ internal sealed class NativeRoom : IDisposable
     }
     internal void Watch(string id, IntPtr window, bool enabled, bool sound = false)
     {
-        if (!peers.TryGetValue(id,out var peer) || !peer.ChannelOpen || (enabled && !peer.Sharing)) return;
+        // Stopping is local first, even while the control channel is unavailable.
+        // Recovery will resend the latest subscription when it can notify the peer.
+        if (!peers.TryGetValue(id,out var peer) || (enabled && (!peer.ChannelOpen || !peer.Sharing))) return;
         peer.SetView(enabled ? window : IntPtr.Zero,sound); peer.Subscribed = enabled;
         peer.Send(peer.WatchMessage()); if (!enabled) Unwatch?.Invoke(id); Changed?.Invoke();
     }
