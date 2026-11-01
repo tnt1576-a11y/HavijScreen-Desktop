@@ -184,6 +184,7 @@ internal static class Gst
     [DllImport(Obj, CallingConvention = CallingConvention.Cdecl)] internal static extern void g_object_unref(IntPtr obj);
     [DllImport(Obj, CallingConvention = CallingConvention.Cdecl)] internal static extern ulong g_signal_connect_data(IntPtr instance, [MarshalAs(UnmanagedType.LPUTF8Str)] string signal, IntPtr callback, IntPtr data, IntPtr destroy, int flags);
     [DllImport(Obj, CallingConvention = CallingConvention.Cdecl)] internal static extern void g_signal_handler_disconnect(IntPtr instance, ulong handler);
+    [DllImport(Obj, EntryPoint = "g_object_get", CallingConvention = CallingConvention.Cdecl)] internal static extern void GetDouble(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string property, out double value, IntPtr end);
     [DllImport(Obj, EntryPoint = "g_object_get", CallingConvention = CallingConvention.Cdecl)] internal static extern void GetInt(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string property, out int value, IntPtr end);
     [DllImport(Obj, EntryPoint = "g_object_get", CallingConvention = CallingConvention.Cdecl)] internal static extern void GetPointer(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string property, out IntPtr value, IntPtr end);
     [DllImport(Obj, EntryPoint = "g_object_set", CallingConvention = CallingConvention.Cdecl)] internal static extern void SetInt(IntPtr obj, [MarshalAs(UnmanagedType.LPUTF8Str)] string property, int value, IntPtr end);

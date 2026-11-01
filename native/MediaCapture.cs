@@ -67,7 +67,9 @@ internal sealed class MediaCapture : IDisposable
 {
     Pipeline? video, audio, preview;
     readonly object previewGate=new();
-    IntPtr videoSink, audioSink, previewSink, previewSource, rawSink, previewValve, encoderElement, captureRate;
+    IntPtr videoSink, audioSink, previewSink, previewSource, rawSink, previewValve, encoderElement, captureRate, encodeSize;
+    int maximumHeight;
+    internal int Height { get; private set; }
     internal int TargetFps { get; private set; }
     internal int BitrateKbps { get; private set; }
     bool disposed, diagnostic;
@@ -103,7 +105,7 @@ internal sealed class MediaCapture : IDisposable
         string size=quality.Width>0&&quality.Height>0?$",width={quality.Width},height={quality.Height}":"";
         // Allow in-flight frames using the old cadence while the source handles
         // a reconfigure event; rejecting them immediately can stop WGC.
-        string raw=$"{input} ! capsfilter name=capture-rate caps-change-mode=delayed caps=\"video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1\" ! d3d11convert ! video/x-raw(memory:D3D11Memory),format=NV12{size}";
+        string raw=$"{input} ! capsfilter name=capture-rate caps-change-mode=delayed caps=\"video/x-raw(memory:D3D11Memory),framerate={quality.Fps}/1\" ! d3d11convert ! capsfilter name=encode-size caps-change-mode=delayed caps=\"video/x-raw(memory:D3D11Memory),format=NV12{size}\"";
         if(synthetic) raw+=" ! identity name=capture-fixture silent=true";
         string playback="valve name=preview-valve drop=true drop-mode=forward-sticky-events ! appsink name=raw-preview emit-signals=true sync=false async=false max-buffers=1 drop=true wait-on-eos=false enable-last-sample=false";
         if(!encode) return raw+" ! "+playback;
@@ -134,7 +136,7 @@ internal sealed class MediaCapture : IDisposable
         try
         {
             video = new Pipeline(VideoPipeline(source,quality,Encoder,synthetic,previewWindow!=IntPtr.Zero,encode));
-            captureRate=Gst.Named(video.Handle,"capture-rate"); TargetFps=quality.Fps;
+            captureRate=Gst.Named(video.Handle,"capture-rate"); encodeSize=Gst.Named(video.Handle,"encode-size"); TargetFps=quality.Fps; maximumHeight=Height=quality.Height;
             video.Failed += message => Failed?.Invoke("Video capture: " + message);
             video.Ended += () => { if (!disposed) Failed?.Invoke("The selected capture source closed."); };
             if(encode) { videoSink = Gst.Named(video.Handle,"encoded-video"); video.Connect(videoSink,"new-sample",new Gst.NewSample((sink,_) => ReadPacket(sink,false))); encoderElement=Gst.Named(video.Handle,"encoder"); BitrateKbps=quality.Kbps; }
@@ -168,6 +170,14 @@ internal sealed class MediaCapture : IDisposable
         // running. No additional frames are captured just to discard them.
         Gst.gst_util_set_object_arg(captureRate,"caps",$"video/x-raw(memory:D3D11Memory),framerate={fps}/1");
         TargetFps=fps;
+    }
+    internal void SetResolution(int height)
+    {
+        if(disposed || maximumHeight==0 || height==Height) return;
+        if(height<480 || height>maximumHeight) throw new ArgumentOutOfRangeException(nameof(height));
+        int width=(int)Math.Round(height*16.0/9/2)*2;
+        Gst.gst_util_set_object_arg(encodeSize,"caps",$"video/x-raw(memory:D3D11Memory),format=NV12,width={width},height={height}");
+        Height=height; RequestKeyframe();
     }
     internal void SetBitrate(int kbps)
     {
@@ -261,7 +271,7 @@ internal sealed class MediaCapture : IDisposable
         audio?.Dispose(); video?.Dispose(); audio = video = null;
         if (audioSink != IntPtr.Zero) Gst.gst_object_unref(audioSink);
         if (videoSink != IntPtr.Zero) Gst.gst_object_unref(videoSink);
-        foreach(var element in new[]{rawSink,previewValve,encoderElement,captureRate}) if(element!=IntPtr.Zero) Gst.gst_object_unref(element);
-        audioSink = videoSink = rawSink = previewValve = encoderElement = captureRate = IntPtr.Zero;
+        foreach(var element in new[]{rawSink,previewValve,encoderElement,captureRate,encodeSize}) if(element!=IntPtr.Zero) Gst.gst_object_unref(element);
+        audioSink = videoSink = rawSink = previewValve = encoderElement = captureRate = encodeSize = IntPtr.Zero;
     }
 }

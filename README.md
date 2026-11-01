@@ -4,7 +4,7 @@
 
 A native Windows app for sharing gameplay with friends. Share a short room code, approve their request, and stream directly between your PCs. Application capture includes that app's audio without sharing the rest of your PC.
 
-[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.5.2/HavijScreen-0.5.2-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.5.2)
+[Download the Windows preview](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/download/v0.6.0/HavijScreen-0.6.0-win-x64.zip) · [Release notes](https://github.com/tnt1576-a11y/HavijScreen-Desktop/releases/tag/v0.6.0)
 
 ## Run on Windows
 
@@ -22,6 +22,12 @@ Both people must use **0.3.0 or newer**. Native rooms cannot join the older WebV
 4. The host chooses **Accept** or **Decline** in the room sidebar. There is no reply code to send back.
 5. Either person selects **Share your screen** or **Start sharing**, opens **Applications** or **Entire Screen**, and clicks the thumbnail to share. Hovering or focusing a card shows **Share Screen**. Use the refresh button to update the list.
 6. Their friend chooses **Watch stream**. Playback starts muted; choose **Enable sound** to listen. Choose **Fullscreen** to expand the video. Press **Esc**, **F11**, or **Exit fullscreen** to return; sound and stop-watching controls stay available.
+
+Choose **Pop out** for a separate resizable player. It keeps playing when the main room window is minimized. Closing the player returns the stream to the room. Fullscreen controls hide after three seconds of inactivity and return when you move the pointer or use the keyboard. Leaving fullscreen from a pop-out returns to that player.
+
+The viewer's gear button contains a **Volume** slider and optional **Connection details**. Volume is separate for each stream and does not change the sender's audio. Muting preserves the volume setting. Connection details show connection state and decoded frame rate; they stay hidden unless opened.
+
+Brief network interruptions show **Reconnecting...** and keep room membership and viewing choices for up to 30 seconds after the interruption is detected. When the existing connection returns, the app restores sharing/watch state and requests a fresh video frame. Changing networks or losing the underlying connection permanently can still require rejoining; this version does not perform ICE restarts. Leaving a room or being removed is immediate, without the recovery wait.
 
 Rooms support four people. The host approves each person and can remove participants. Pending requests can wait up to ten minutes without opening a peer connection. **Disable room code** stops invitations while existing streams continue. Leaving as host closes the room. Room codes are not saved between sessions.
 
@@ -49,9 +55,11 @@ No microphone or camera access is requested. Application capture uses Windows Gr
 
 Start with **Performance** for a demanding game. It begins at 720p/30, reduces capture to 20 or 15 fps if sustained encoding output falls behind, and cautiously tries a higher rate after recovery. Audio and peer connections keep running during these changes. It watches its own stream cadence, not the game's FPS or GPU utilization; it cannot detect every case where sharing affects a game. New preferences default to Performance; existing quality choices are preserved. The other presets keep a fixed capture-rate target.
 
-Both people should update to **0.5.2 or newer** for improved motion-video recovery. Damaged video waits for a fresh keyframe instead of displaying broken blocks; severe packet loss can briefly freeze the picture.
+Both people should update to **0.6.0 or newer** for connection recovery and the latest playback improvements. Damaged video waits for a fresh keyframe instead of displaying broken blocks; severe packet loss can briefly freeze the picture.
 
-Actual frame rate depends on the source, GPU and network. HavijScreen also lowers video bitrate when viewers report packet loss or rising network delay, then gradually raises it as the connection recovers, up to the selected preset's target. Choose a lower preset if the stream remains difficult to watch.
+Received video and audio follow playback-clock timing. Video that is too late is discarded after decoding instead of building up a long playback queue.
+
+Actual frame rate depends on the source, GPU and network. HavijScreen also lowers video bitrate when viewers report packet loss or rising network delay, then gradually raises it as the connection recovers, up to the selected preset's target. For fixed-resolution presets, sustained bandwidth reductions also lower resolution, down to 480p; stable recovery gradually restores it up to your selected resolution. Frame rate follows the selected preset or Performance mode. **Source** resolution stays at native size for text sharing. Resolution changes keep the room, audio and shared encoder running. Choose a lower preset if the stream remains difficult to watch.
 
 The source picker's gear menu offers **Performance**, **High quality** (1440p, 60 fps; previously called Gaming), **Screenshare** (source resolution, 15 fps), and **Custom**. Custom supports source resolution, 480p, 720p, 1080p or 1440p at 15, 30 or 60 fps. **Advanced** controls cursor capture. The bottom-left summary shows the settings that will apply when you click a source.
 
@@ -94,6 +102,6 @@ On Windows x64, with PowerShell and internet access:
 .\scripts\build-native.ps1
 ```
 
-The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.5.2/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
+The scripts fetch a pinned, checksum-verified .NET SDK and official native media libraries into `vendor`, without installing them system-wide. The native app source is in `native`. The self-contained portable build is written to `dist/native-0.6.0/HavijScreen`, with a ZIP in `dist`. Build into an empty output directory. Source archives, build recipes and third-party notices accompany the release; see [THIRD-PARTY.md](native/THIRD-PARTY.md).
 
 `npm run build` runs the native build script. The previous HTML/WebView2 implementation remains in `app` and `desktop`; `npm run build:legacy` builds it separately. Its browser preview and tests remain available for that implementation.

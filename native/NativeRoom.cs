@@ -20,6 +20,8 @@ internal sealed class NativeRoom : IDisposable
     int captureGeneration;
     NetworkRate rates=new(Quality.All[0].Kbps);
     readonly PerformanceRate performance=new();
+    ResolutionRate resolution=new(Quality.All[0]);
+    internal int Height=>runningEncode?capture?.Height??quality.Height:quality.Height;
     internal int TargetFps=>runningGeneration==captureGeneration?capture?.TargetFps??quality.Fps:quality.Fps;
     internal int BitrateKbps=>capture?.BitrateKbps??0;
     internal int FeedbackSamples { get; private set; }
@@ -29,10 +31,20 @@ internal sealed class NativeRoom : IDisposable
     internal string HostId { get; private set; }
     internal bool IsHost => Id == HostId;
     internal bool Stun { get; set; } = true;
-    internal bool Sharing { get; private set; }
+    sealed record ShareState(long Revision,bool Active);
+    ShareState shareState=new(0,false);
+    internal bool Sharing
+    {
+        get=>Volatile.Read(ref shareState).Active;
+        private set
+        {
+            ShareState old;
+            do { old=Volatile.Read(ref shareState); } while(!ReferenceEquals(Interlocked.CompareExchange(ref shareState,new(old.Revision+1,value),old),old));
+        }
+    }
     internal string Name { get => name; set { if (!SetupCrypto.ValidName(value)) throw new InvalidOperationException("Choose a name with 1–32 characters."); name = value.Trim(); } }
     internal IReadOnlyList<NativePeer> Peers => peers.Values.ToArray();
-    internal IReadOnlyList<NativePeer> Connected => peers.Values.Where(p => p.ChannelOpen).ToArray();
+    internal IReadOnlyList<NativePeer> Connected => peers.Values.Where(p => p.ChannelOpen || (p.Established && p.Reconnecting)).ToArray();
     internal int Viewers => peers.Values.Count(p => p.ChannelOpen && p.WatchingUs);
     internal string Encoder => capture?.Encoder ?? "";
     internal string? CaptureError { get; private set; }
@@ -61,8 +73,17 @@ internal sealed class NativeRoom : IDisposable
         peer.Opened += () =>
         {
             if (disposed || !peers.ContainsKey(peer.Id)) return;
-            peer.Send(new { type = "hello", name = Name, sharing = Sharing, info = Info() });
+            var snapshot=Volatile.Read(ref shareState); peer.Send(new { type = "hello", name = Name, sharing = snapshot.Active, revision=snapshot.Revision, info = Info(), recovery=1 });
             Changed?.Invoke(); if (IsHost) UpdateMesh();
+        };
+        peer.ConnectionChanged += () => Changed?.Invoke();
+        peer.Recovered += () =>
+        {
+            if(disposed || !peers.TryGetValue(peer.Id,out var current) || !ReferenceEquals(current,peer)) return;
+            peer.Send(SharingMessage());
+            peer.Send(peer.WatchMessage());
+            if(peer.WatchingUs) _=RequestKeyframe(peer);
+            Changed?.Invoke();
         };
         peer.Closed += () => Drop(peer.Id,true);
         peer.Failed += error =>
@@ -114,19 +135,43 @@ internal sealed class NativeRoom : IDisposable
         catch(Exception error) { if(!disposed) Notice?.Invoke("Video recovery: "+error.Message); }
         finally { Interlocked.Exchange(ref keyframePending,0); }
     }
-    object Info() => new { width = quality.Width, height = quality.Height, fps = TargetFps, audio, appAudio = source?.Monitor == false && audio };
+    object SharingMessage()
+    {
+        var snapshot=Volatile.Read(ref shareState);
+        return new { type="sharing",active=snapshot.Active,revision=snapshot.Revision,info=Info() };
+    }
+    void ReceiveSharing(NativePeer peer,JsonElement message,string field)
+    {
+        if(message.TryGetProperty("revision",out var value) && value.TryGetInt64(out long revision))
+        {
+            if(revision<0 || revision<peer.SharingRevision) return;
+            peer.SharingRevision=revision;
+        }
+        peer.Sharing=message.Bool(field);
+        if(!peer.Sharing) { peer.SetView(IntPtr.Zero,false); peer.Subscribed=false; Unwatch?.Invoke(peer.Id); }
+    }
+    object Info() => new { width = Height>0 && Height!=quality.Height?(int)Math.Round(Height*16.0/9/2)*2:quality.Width, height = Height, fps = TargetFps, audio, appAudio = source?.Monitor == false && audio };
     async Task Handle(NativePeer peer, string text)
     {
         if (disposed || !peers.ContainsKey(peer.Id)) return;
         using var document = JsonDocument.Parse(text,new JsonDocumentOptions { MaxDepth = 24 }); var message = document.RootElement;
         switch (message.Text("type"))
         {
+            case "leave": Drop(peer.Id,true); break;
+            case "ping": peer.Send(new { type="pong" }); break;
+            case "pong": break;
             case "hello":
+                if(message.Int("recovery")==1) peer.EnableRecovery();
                 string incomingName = message.Text("name",32); if (!SetupCrypto.ValidName(incomingName)) return;
-                peer.Name = incomingName; peer.Sharing = message.Bool("sharing"); Changed?.Invoke(); break;
+                peer.Name = incomingName; ReceiveSharing(peer,message,"sharing"); Changed?.Invoke(); break;
             case "sharing":
-                peer.Sharing = message.Bool("active"); if (!peer.Sharing) { peer.SetView(IntPtr.Zero,false); peer.Subscribed = false; Unwatch?.Invoke(peer.Id); } Changed?.Invoke(); break;
+                ReceiveSharing(peer,message,"active"); Changed?.Invoke(); break;
             case "watch":
+                if(message.TryGetProperty("revision",out var watchValue) && watchValue.TryGetInt64(out long watchRevision))
+                {
+                    if(watchRevision<0 || watchRevision<peer.WatchRevision) return;
+                    peer.WatchRevision=watchRevision;
+                }
                 peer.WatchingUs = message.Bool("active") && Sharing; RefreshOutgoing(); await ReconcileMedia(); Changed?.Invoke(); break;
             case "mesh-plan" when !IsHost && peer.Id == HostId:
                 var people = message.Item("people"); if (people.ValueKind != JsonValueKind.Array || people.GetArrayLength() > 3) return;
@@ -188,12 +233,12 @@ internal sealed class NativeRoom : IDisposable
     {
         if (!diagnostic) Sources.Validate(captureSource);
         CaptureError=null; source = captureSource; quality = captureQuality; audio = shareAudio; synthetic = diagnostic; Sharing = true; Interlocked.Increment(ref captureGeneration);
-        Broadcast(new { type = "sharing", active = true, info = Info() }); await ReconcileMedia(); Changed?.Invoke();
+        Broadcast(SharingMessage()); await ReconcileMedia(); Changed?.Invoke();
     }
     internal async Task StopSharing()
     {
         Sharing = false; foreach (var peer in peers.Values) peer.WatchingUs = false; RefreshOutgoing(); Interlocked.Increment(ref captureGeneration);
-        Broadcast(new { type = "sharing", active = false, info = (object?)null }); await ReconcileMedia(); Changed?.Invoke();
+        Broadcast(SharingMessage()); await ReconcileMedia(); Changed?.Invoke();
     }
     int runningGeneration = -1;
     IntPtr previewWindow, runningPreview;
@@ -225,7 +270,7 @@ internal sealed class NativeRoom : IDisposable
                 next.Packet += (isAudio,buffer,time) => { foreach (var peer in Volatile.Read(ref outgoing)) peer.Push(isAudio,buffer,time); };
                 next.Failed += error => { _ = CaptureFailed(next,error); };
                 next.PreviewFailed += error => { _ = PreviewFailed(next,error); };
-                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; rates=new(quality.Kbps); performance.Reset(Environment.TickCount64,next.Frames); if(encode) EncoderStarts++; }
+                try { await Task.Run(() => next.Start(source!,quality,audio,synthetic,preview,encode)); capture = next; runningGeneration = generation; runningPreview=preview; runningEncode=encode; rates=new(quality.Kbps); resolution=new(quality); performance.Reset(Environment.TickCount64,next.Frames); if(encode) EncoderStarts++; }
                 catch(Exception error) { next.Dispose(); ClearFailedShare(error.Message); }
             }
             else if(capture!=null&&runningPreview!=preview)
@@ -260,6 +305,8 @@ internal sealed class NativeRoom : IDisposable
                     var current=Volatile.Read(ref outgoing); rates.Retain(current.Select(p=>p.Id));
                     foreach(var item in feedback) if(item.Value!=null&&current.Contains(item.Peer)) { rates.Observe(item.Peer.Id,item.Value,Environment.TickCount64); FeedbackSamples++; }
                     capture.SetBitrate(rates.Target);
+                    int height=resolution.Observe(rates.Target,Environment.TickCount64);
+                    if(height!=capture.Height) { capture.SetResolution(height); Changed?.Invoke(); }
                 }
                 finally { mediaGate.Release(); }
             }
@@ -271,7 +318,7 @@ internal sealed class NativeRoom : IDisposable
     {
         Sharing=false; CaptureError=error+" Choose the source again, or share video without audio.";
         foreach(var peer in peers.Values) peer.WatchingUs=false;
-        RefreshOutgoing(); Broadcast(new { type="sharing",active=false }); Changed?.Invoke(); Notice?.Invoke(CaptureError);
+        RefreshOutgoing(); Broadcast(SharingMessage()); Changed?.Invoke(); Notice?.Invoke(CaptureError);
     }
     async Task CaptureFailed(MediaCapture expected,string error)
     {
@@ -289,7 +336,7 @@ internal sealed class NativeRoom : IDisposable
     {
         if (!peers.TryGetValue(id,out var peer) || !peer.ChannelOpen || (enabled && !peer.Sharing)) return;
         peer.SetView(enabled ? window : IntPtr.Zero,sound); peer.Subscribed = enabled;
-        peer.Send(new { type = "watch", active = enabled }); if (!enabled) Unwatch?.Invoke(id); Changed?.Invoke();
+        peer.Send(peer.WatchMessage()); if (!enabled) Unwatch?.Invoke(id); Changed?.Invoke();
     }
     internal void Remove(string id) { if (!IsHost) return; Broadcast(new { type = "removed", id }); Drop(id); }
     void RefreshOutgoing() => Volatile.Write(ref outgoing,peers.Values.Where(p => p.WatchingUs && p.ChannelOpen).ToArray());
@@ -306,7 +353,7 @@ internal sealed class NativeRoom : IDisposable
     public void Dispose()
     {
         if (disposed) return;
-        if (IsHost) Broadcast(new { type = "room-ended" });
+        if (IsHost) Broadcast(new { type = "room-ended" }); else Broadcast(new { type="leave" });
         disposed = true; Sharing = false; lifetime.Cancel();
         foreach (var id in peers.Keys) Drop(id);
         Completion = Task.WhenAll(shutdown.Append(ReconcileMedia()));

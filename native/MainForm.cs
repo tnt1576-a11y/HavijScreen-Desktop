@@ -60,7 +60,7 @@ internal sealed class MainForm : NativeForm
         {
             if (WindowState == FormWindowState.Minimized)
             {
-                foreach(var item in cards.Where(item => item.Value.Active).ToArray()) { pausedViews.Add(item.Key); room.Watch(item.Key,IntPtr.Zero,false); }
+                foreach(var item in cards.Where(item => item.Value.Active && !item.Value.IsDetached).ToArray()) { pausedViews.Add(item.Key); room.Watch(item.Key,IntPtr.Zero,false); }
             }
             else if (pausedViews.Count > 0)
             {
@@ -166,7 +166,7 @@ internal sealed class MainForm : NativeForm
         share.Enabled = hero.Enabled = ready && !resetting; share.Text = room.Sharing ? "Stop sharing" : "Start sharing"; hero.Visible = !room.Sharing;
         people.SuspendLayout(); foreach(Control old in people.Controls.Cast<Control>().ToArray()) old.Dispose(); people.Controls.Clear();
         AddPerson(displayName.Text,room.IsHost ? "Room host" : "Connected",null);
-        foreach(var peer in room.Connected) AddPerson(peer.Name,peer.Sharing ? "Screen available" : (peer.Id == room.HostId ? "Room host" : "Connected"),peer);
+        foreach(var peer in room.Connected) AddPerson(peer.Name,peer.Reconnecting ? "Reconnecting..." : peer.Sharing ? "Screen available" : (peer.Id == room.HostId ? "Room host" : "Connected"),peer);
         foreach(var request in lobby.Requests)
         {
             var card = Person(request.Name,request.Phase == "pending" ? "Wants to join" : "Connecting…",105);
@@ -217,6 +217,7 @@ internal sealed class MainForm : NativeForm
         {
             card = new VideoCard(peer); cards[peer.Id] = card; videos.Controls.Add(card);
             card.Stop += () => room.Watch(peer.Id,IntPtr.Zero,false);
+            card.Docked += () => { if(!closing && card.Active && WindowState==FormWindowState.Minimized) { pausedViews.Add(peer.Id); room.Watch(peer.Id,IntPtr.Zero,false); } };
         }
         card.Active = true; ArrangeVideos(); room.Watch(peer.Id,card.VideoHandle,true,card.Sound);
     }
@@ -292,7 +293,7 @@ internal sealed class MainForm : NativeForm
         if (tick-lastTick >= 500) { lastBytes = total; lastTick = tick; }
         string encoder = room.Encoder switch { "nvd3d11h264enc" => "NVIDIA NVENC", "amfh264enc" => "AMD AMF", "qsvh264enc" => "Intel Quick Sync", _ => room.Sharing ? "Waiting for a viewer" : "—" };
         var selected = (Quality)quality.SelectedItem!;
-        stats.UpdateValues(room.Sharing ? $"{(selected.Height==0?"Source":selected.Height+"p")} / {room.TargetFps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
+        stats.UpdateValues(room.Sharing ? $"{(room.Height==0?"Source":room.Height+"p")} / {room.TargetFps} fps" : "Not sharing",$"{mbps:F2} Mbps",encoder,$"{room.Viewers} people");
     }
     void ShowNotice(string message) { state.Text = message; state.ForeColor = Color.FromArgb(234,171,141); }
     void ReadSettings()

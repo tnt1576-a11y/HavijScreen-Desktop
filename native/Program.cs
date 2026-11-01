@@ -13,6 +13,7 @@ internal static class Program
         string? report = Option(args,"report");
         try
         {
+            if (args.Contains("--watching-test")) { Gst.Initialize(runtime); return Diagnostics.Watching(args); }
             if (args.Contains("--video-recovery-test")) { Gst.Initialize(runtime); return Diagnostics.VideoRecovery(args); }
             if (args.Contains("--fixture")) return Diagnostics.Fixture(args);
             if (args.Contains("--picker-preview")) return Diagnostics.PickerPreview(args);

@@ -121,7 +121,10 @@ internal static partial class Diagnostics
         await Until(()=>receiver.VideoFrames>=30&&receiver.AudioPackets>=20,6000,"Fullscreen fixture did not decode.");
         const BindingFlags flags=BindingFlags.Instance|BindingFlags.NonPublic;
         var sound=(Button)typeof(VideoCard).GetField("sound",flags)!.GetValue(card)!;
-        sound.PerformClick();
+        sound.PerformClick(); receiver.SetVolume(37);
+        IntPtr gain=(IntPtr)typeof(NativePeer).GetField("volume",flags)!.GetValue(receiver)!;
+        Gst.GetDouble(gain,"volume",out double applied,IntPtr.Zero);
+        if(Math.Abs(applied-.37)>.001) throw new InvalidOperationException("Playback volume did not reach the audio pipeline.");
         for(int i=0;i<3;i++)
         {
             card.ToggleFullscreen();
